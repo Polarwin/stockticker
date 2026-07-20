@@ -37,14 +37,17 @@ def load_watchlist(path: Path = WATCHLIST_PATH) -> list[str]:
     return tickers
 
 
-def fetch_latest_price(ticker: str) -> float:
-    """Fetch the latest closing price for a given ticker.
+def fetch_price_and_change(ticker: str) -> tuple[float, float | None]:
+    """Fetch the latest close and % change vs the previous close.
+
+    Returns (latest_price, pct_change). pct_change is None when the
+    prior close is unavailable (e.g. only one trading day returned).
 
     Raises a ValueError with a per-symbol message on failure.
     """
     try:
         data = yf.Ticker(ticker)
-        history = data.history(period="1d")
+        history = data.history(period="2d")
     except Exception as exc:
         raise ValueError(f"{ticker}: fetch failed ({exc})")
 
@@ -52,38 +55,87 @@ def fetch_latest_price(ticker: str) -> float:
         raise ValueError(f"{ticker}: no price data available")
 
     try:
-        return float(history["Close"].iloc[-1])
+        latest = float(history["Close"].iloc[-1])
     except (KeyError, IndexError, TypeError) as exc:
         raise ValueError(f"{ticker}: unexpected response format ({exc})")
 
+    if len(history) < 2:
+        return latest, None
 
-def fetch_all_prices(tickers: list[str]) -> dict[str, float | str]:
-    """Fetch prices for all tickers, returning price or error message per symbol."""
-    results: dict[str, float | str] = {}
+    try:
+        previous = float(history["Close"].iloc[-2])
+    except (KeyError, IndexError, TypeError) as exc:
+        return latest, None
+
+    if previous == 0:
+        return latest, None
+
+    pct_change = (latest - previous) / previous * 100
+    return latest, pct_change
+
+
+def format_change(pct_change: float | None) -> str:
+    """Format the percent change with sign and two decimals, or N/A."""
+    if pct_change is None:
+        return "N/A"
+    return f"{pct_change:+.2f}%"
+
+
+def format_price_line(
+    ticker: str,
+    price: float,
+    pct_change: float | None,
+    *,
+    for_telegram: bool = False,
+) -> str:
+    """Format one price line for console or Telegram output."""
+    change = format_change(pct_change)
+    line = f"{ticker}: ${price:.2f} ({change})"
+
+    if for_telegram and pct_change is not None:
+        if pct_change > 0:
+            line = f"🟢 {line}"
+        elif pct_change < 0:
+            line = f"🔴 {line}"
+
+    return line
+
+
+def fetch_all_prices(tickers: list[str]) -> dict[str, tuple[float, float | None] | str]:
+    """Fetch prices for all tickers, returning (price, change) or an error per symbol."""
+    results: dict[str, tuple[float, float | None] | str] = {}
     for ticker in tickers:
         try:
-            results[ticker] = fetch_latest_price(ticker)
+            results[ticker] = fetch_price_and_change(ticker)
         except ValueError as exc:
             results[ticker] = str(exc)
     return results
 
 
-def print_prices(results: dict[str, float | str], timestamp: str) -> None:
+def print_prices(
+    results: dict[str, tuple[float, float | None] | str], timestamp: str
+) -> None:
     """Print timestamped prices/errors for each ticker."""
     for ticker, value in results.items():
-        if isinstance(value, float):
-            print(f"{timestamp} {ticker}: ${value:.2f}")
+        if isinstance(value, tuple):
+            price, change = value
+            print(f"{timestamp} {format_price_line(ticker, price, change)}")
         else:
             print(f"{timestamp} {value}")
 
 
-def format_summary(results: dict[str, float | str], timestamp: str) -> str:
+def format_summary(
+    results: dict[str, tuple[float, float | None] | str], timestamp: str
+) -> str:
     """Format a single Telegram message summarizing the round."""
     header = f"📈 Stock Update ({timestamp})"
     lines = [header]
     for ticker, value in results.items():
-        if isinstance(value, float):
-            lines.append(f"{ticker}: ${value:.2f}")
+        if isinstance(value, tuple):
+            price, change = value
+            lines.append(
+                format_price_line(ticker, price, change, for_telegram=True)
+            )
         else:
             lines.append(f"{ticker}: {value}")
     return "\n".join(lines)
