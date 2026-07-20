@@ -92,8 +92,10 @@ def format_price_line(
     change = format_change(pct_change)
     line = f"{ticker}: ${price:.2f} ({change})"
 
-    if for_telegram and pct_change is not None:
-        if pct_change > 0:
+    if for_telegram:
+        if pct_change is None:
+            line = f"⚠️ {line}"
+        elif pct_change > 0:
             line = f"🟢 {line}"
         elif pct_change < 0:
             line = f"🔴 {line}"
@@ -112,11 +114,29 @@ def fetch_all_prices(tickers: list[str]) -> dict[str, tuple[float, float | None]
     return results
 
 
+def sort_results(
+    results: dict[str, tuple[float, float | None] | str],
+) -> list[tuple[str, tuple[float, float | None] | str]]:
+    """Sort results by % change descending; errors and N/A go at the bottom."""
+
+    def sort_key(item: tuple[str, tuple[float, float | None] | str]) -> tuple[int, float]:
+        value = item[1]
+        if isinstance(value, tuple):
+            _price, change = value
+            if change is None:
+                return (1, 0.0)
+            return (0, -change)
+        return (2, 0.0)
+
+    return sorted(results.items(), key=sort_key)
+
+
 def print_prices(
-    results: dict[str, tuple[float, float | None] | str], timestamp: str
+    sorted_results: list[tuple[str, tuple[float, float | None] | str]],
+    timestamp: str,
 ) -> None:
     """Print timestamped prices/errors for each ticker."""
-    for ticker, value in results.items():
+    for ticker, value in sorted_results:
         if isinstance(value, tuple):
             price, change = value
             print(f"{timestamp} {format_price_line(ticker, price, change)}")
@@ -125,19 +145,20 @@ def print_prices(
 
 
 def format_summary(
-    results: dict[str, tuple[float, float | None] | str], timestamp: str
+    sorted_results: list[tuple[str, tuple[float, float | None] | str]],
+    timestamp: str,
 ) -> str:
     """Format a single Telegram message summarizing the round."""
     header = f"📈 Stock Update ({timestamp})"
     lines = [header]
-    for ticker, value in results.items():
+    for ticker, value in sorted_results:
         if isinstance(value, tuple):
             price, change = value
             lines.append(
                 format_price_line(ticker, price, change, for_telegram=True)
             )
         else:
-            lines.append(f"{ticker}: {value}")
+            lines.append(f"⚠️ {ticker}: {value}")
     return "\n".join(lines)
 
 
@@ -183,9 +204,10 @@ def main() -> None:
     while True:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         results = fetch_all_prices(tickers)
-        print_prices(results, timestamp)
+        sorted_results = sort_results(results)
+        print_prices(sorted_results, timestamp)
 
-        summary = format_summary(results, timestamp)
+        summary = format_summary(sorted_results, timestamp)
         send_telegram(summary)
 
         if args.once:
