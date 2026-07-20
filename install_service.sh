@@ -22,6 +22,7 @@ WorkingDirectory=${PROJECT_DIR}
 ExecStart=${PROJECT_DIR}/bin/python ${PROJECT_DIR}/main.py
 Restart=always
 RestartSec=10
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
