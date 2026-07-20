@@ -1,7 +1,7 @@
 # Python virtual environment
 bin/
 lib/
-lib64/
+lib64
 include/
 share/
 pyvenv.cfg
