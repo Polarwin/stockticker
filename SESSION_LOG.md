@@ -293,6 +293,20 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 15. Move Flask Off Port 8000
+
+**Asked:** Use a port other than 8000 for the web UI so 8000 stays free for testing other projects.
+
+**Done:**
+- Changed `web_port` to 8010 in `settings.json` and in `main.py` `DEFAULT_SETTINGS`.
+- Updated the fallback port in `install_nginx.sh` to 8010 (the script reads `settings.json` at runtime, so the generated nginx config proxies to 127.0.0.1:8010 automatically).
+- Restarted `web.py`: now listening on 127.0.0.1:8010 (`curl /api/watchlist` → 200); port 8000 is free (connection refused).
+
+**Key decisions:**
+- Chose 8010 as an uncommon dev port; only the settings value and defaults changed since every consumer (web.py, install_nginx.sh) reads the port from settings.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
@@ -321,7 +335,7 @@ This log records the work done in this CLI session, in chronological order.
 - Running without `--once` loops every `ticker_interval_seconds` (600). Ticker rounds only run when `ticker_enabled` is true, and are skipped outside market hours (Mon-Fri 09:30-16:00 America/New_York); the earnings reminder runs once per day at/after 08:00 market time regardless; the price database updates once per day at/after 18:00 market time when `db_enabled` is true (prices + earnings table).
 - `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current); `--update-earnings` refreshes only the earnings table.
 - `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
-- `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8000): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar.
+- `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8010): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar.
 - `bash install_nginx.sh` (requires sudo) deploys nginx as a reverse proxy so the UI is reachable on the LAN at http://<LAN-IP>/stockticker while Flask stays on localhost.
 - All schedule/market/earnings/db/web settings live in `settings.json`; missing file falls back to built-in defaults with a warning.
 - `bash install_service.sh` (requires sudo) installs the watcher and the web UI as systemd services.

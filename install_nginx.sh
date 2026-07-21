@@ -13,7 +13,7 @@ URL_PATH="/stockticker"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${PROJECT_DIR}"
 
-# Read the Flask bind address from settings.json (fallback: 127.0.0.1:8000).
+# Read the Flask bind address from settings.json (fallback: 127.0.0.1:8010).
 read -r WEB_HOST WEB_PORT <<< "$("${PROJECT_DIR}/bin/python" - <<'EOF'
 import json
 try:
@@ -21,7 +21,7 @@ try:
         s = json.load(f)
 except Exception:
     s = {}
-print(s.get("web_host", "127.0.0.1"), s.get("web_port", 8000))
+print(s.get("web_host", "127.0.0.1"), s.get("web_port", 8010))
 EOF
 )"
 

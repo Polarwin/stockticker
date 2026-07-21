@@ -30,7 +30,7 @@ DEFAULT_SETTINGS = {
     "db_update_time": "18:00",
     "db_backfill_days": 365,
     "web_host": "127.0.0.1",
-    "web_port": 8000,
+    "web_port": 8010,
 }
 
 
