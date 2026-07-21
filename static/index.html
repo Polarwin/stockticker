@@ -320,6 +320,15 @@ async function loadWatchlist() {
   }
   const ul = document.getElementById('watchlist');
   ul.innerHTML = '';
+  // Sort by % change descending; symbols without quote data go at the bottom.
+  symbols = symbols.slice().sort((a, b) => {
+    const ca = (quotes[a] || {}).change_pct;
+    const cb = (quotes[b] || {}).change_pct;
+    if (ca == null && cb == null) return a.localeCompare(b);
+    if (ca == null) return 1;
+    if (cb == null) return -1;
+    return cb - ca;
+  });
   for (const sym of symbols) {
     const q = quotes[sym] || {};
     const li = document.createElement('li');

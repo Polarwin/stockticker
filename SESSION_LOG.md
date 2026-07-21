@@ -346,6 +346,19 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 18. Sort Web Watchlist by % Change
+
+**Asked:** Sort the web UI watchlist by price change percentage, descending.
+
+**Done:**
+- `static/index.html`: `loadWatchlist()` now sorts symbols by `change_pct` from `/api/quotes`, descending — biggest gainer first, biggest loser last; symbols without quote data go at the bottom (alphabetical among themselves), matching the console ticker's sort rule.
+- Verified the comparator with node (gainers → losers → no-data ordering correct).
+
+**Key decisions:**
+- Sorted client-side rather than in `/api/watchlist` so the raw watchlist API keeps file order while the UI applies presentation ordering. Static-only change — no service restart needed.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
