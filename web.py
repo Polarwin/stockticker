@@ -169,12 +169,18 @@ def api_search():
         return jsonify([])
 
     try:
-        results = yf.Search(query, max_results=10).quotes
+        results = yf.Search(query, max_results=20).quotes
         matches = []
         for quote in results:
             symbol = (quote.get("symbol") or "").upper()
             name = quote.get("shortname") or quote.get("longname") or ""
-            if symbol:
+            # Only suggest symbols the watchlist POST endpoint would accept
+            # (stocks/ETFs; skips futures, forex, foreign-exchange variants).
+            if (
+                symbol
+                and SYMBOL_RE.match(symbol)
+                and quote.get("quoteType") in ("EQUITY", "ETF", "INDEX")
+            ):
                 matches.append({"symbol": symbol, "name": name})
             if len(matches) >= 10:
                 break

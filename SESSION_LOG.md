@@ -391,6 +391,18 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 21. Filter Autocomplete Suggestions to Addable Symbols
+
+**Asked:** Autocomplete suggestions "not working" — is a database of possible symbols needed?
+
+**Done:**
+- Diagnosed: `/api/search` worked (web log showed the user's searches returning 200), but `yf.Search` returns futures, forex, and foreign-exchange variants (`PLT=F`, `AAPL.SW`, `D90.F`) that the watchlist POST validator (`^[A-Z.]{1,6}$`) rejects — clicking such a suggestion produced an "invalid symbol" error, which looked like autocomplete was broken.
+- `web.py`: search now filters `yf.Search` results to `quoteType` in EQUITY/ETF/INDEX whose symbol passes the same `SYMBOL_RE` validator as the add endpoint, so every suggestion is guaranteed addable.
+- Verified live: `q=plt` → PLTR/PLTK/PLA/PLTU (futures gone); `q=apple` → AAPL/APLE only (foreign listings filtered).
+- No new database needed: `yf.Search` is the live, comprehensive source; the bundled `static/symbols.json` (503 S&P 500 names) stays as the offline/rate-limit fallback.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
