@@ -17,6 +17,7 @@ SETTINGS_PATH = Path(__file__).with_name("settings.json")
 
 DEFAULT_SETTINGS = {
     "ticker_interval_seconds": 600,
+    "ticker_enabled": False,
     "ticker_market_hours_only": True,
     "market_timezone": "America/New_York",
     "market_open": "09:30",
@@ -110,18 +111,23 @@ def main() -> None:
     check_time = dt_time.fromisoformat(settings["earnings_check_time"])
     last_earnings_check_date = None
 
+    if not settings["ticker_enabled"]:
+        print("Ticker disabled in settings, earnings reminder active")
+
     while True:
         now = datetime.now(market_tz)
 
-        if settings["ticker_market_hours_only"] and not is_market_open(
-            now, settings["market_open"], settings["market_close"]
-        ):
-            print(
-                f"{now.strftime('%Y-%m-%d %H:%M:%S')} "
-                "Market closed, skipping ticker round"
-            )
-        else:
-            do_ticker_round(args.test)
+        ticker_enabled = settings["ticker_enabled"]
+        if ticker_enabled:
+            if settings["ticker_market_hours_only"] and not is_market_open(
+                now, settings["market_open"], settings["market_close"]
+            ):
+                print(
+                    f"{now.strftime('%Y-%m-%d %H:%M:%S')} "
+                    "Market closed, skipping ticker round"
+                )
+            else:
+                do_ticker_round(args.test)
 
         if now.time() >= check_time and last_earnings_check_date != now.date():
             last_earnings_check_date = now.date()

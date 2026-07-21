@@ -177,6 +177,25 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 10. `ticker_enabled` Setting
+
+**Asked:** Add a `ticker_enabled` boolean (default false) to `settings.json`. When false, the loop skips all ticker rounds and only performs the daily earnings check, printing one startup line: `Ticker disabled in settings, earnings reminder active`. `--once` must override `ticker_enabled` for that single run (manual price check) while still respecting `--test`.
+
+**Done:**
+- Added `"ticker_enabled": false` to `settings.json` and to `DEFAULT_SETTINGS` in `main.py`.
+- Gated the loop's ticker round (including the market-hours skip message) behind `ticker_enabled`; the daily earnings check runs regardless.
+- Printed the startup line once before the loop when the ticker is disabled.
+- Left the `--once` path running the ticker round unconditionally (overrides `ticker_enabled`), with `--test` still suppressing Telegram.
+- Verified:
+  - `bin/python main.py --once --test` still runs a full ticker round + earnings check despite `ticker_enabled: false`.
+  - Loop mode with `ticker_enabled: false` prints only the startup line before 08:00 market time; with `earnings_check_time` temporarily set to `00:00`, the loop printed the startup line plus earnings matches and no ticker round (settings restored afterwards).
+
+**Key decisions:**
+- The startup line is printed once at loop start rather than every round, per the spec.
+- The market-closed skip message only appears when the ticker is enabled, so a disabled ticker produces no per-round noise.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
@@ -194,8 +213,8 @@ This log records the work done in this CLI session, in chronological order.
 
 **Runtime behavior:**
 - `python main.py --once` runs one ticker round and one earnings check immediately (ignoring the schedule), prints timestamped output, and sends Telegram messages if credentials are configured.
-- Running without `--once` loops every `ticker_interval_seconds` (600), skipping ticker rounds outside market hours (Mon-Fri 09:30-16:00 America/New_York) and running the earnings reminder once per day at/after 08:00 market time.
-- `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window.
+- Running without `--once` loops every `ticker_interval_seconds` (600). Ticker rounds only run when `ticker_enabled` is true, and are skipped outside market hours (Mon-Fri 09:30-16:00 America/New_York); the earnings reminder runs once per day at/after 08:00 market time regardless.
+- `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
 - All schedule/market/earnings settings live in `settings.json`; missing file falls back to built-in defaults with a warning.
 - `bash install_service.sh` (requires sudo) installs the watcher as a systemd service.
 - `bash uninstall_service.sh` (requires sudo) removes it.
