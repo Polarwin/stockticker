@@ -199,12 +199,12 @@ async function api(path, options) {
 }
 
 async function loadConfig() {
-  const cfg = await api('/api/config');
+  const cfg = await api('api/config');
   remindDays = cfg.earnings_remind_days;
 }
 
 async function loadWatchlist() {
-  const symbols = await api('/api/watchlist');
+  const symbols = await api('api/watchlist');
   const ul = document.getElementById('watchlist');
   ul.innerHTML = '';
   for (const sym of symbols) {
@@ -222,7 +222,7 @@ async function loadWatchlist() {
     del.title = 'Remove ' + sym;
     del.addEventListener('click', async (e) => {
       e.stopPropagation();
-      await api('/api/watchlist/' + encodeURIComponent(sym), { method: 'DELETE' });
+      await api('api/watchlist/' + encodeURIComponent(sym), { method: 'DELETE' });
       if (currentSymbol === sym) { currentSymbol = null; clearChart(); }
       loadWatchlist();
       loadEarnings(currentRange());
@@ -291,8 +291,8 @@ async function selectSymbol(sym) {
   document.getElementById('chart-symbol').textContent = sym;
 
   const [prices, status] = await Promise.all([
-    api('/api/prices/' + encodeURIComponent(sym)),
-    api('/api/status/' + encodeURIComponent(sym)),
+    api('api/prices/' + encodeURIComponent(sym)),
+    api('api/status/' + encodeURIComponent(sym)),
   ]);
 
   const badge = document.getElementById('earnings-badge');
@@ -320,7 +320,7 @@ addInput.addEventListener('input', () => {
   const q = addInput.value.trim();
   if (!q) { acBox.style.display = 'none'; return; }
   acTimer = setTimeout(async () => {
-    const matches = await api('/api/search?q=' + encodeURIComponent(q));
+    const matches = await api('api/search?q=' + encodeURIComponent(q));
     acBox.innerHTML = '';
     if (!matches.length) { acBox.style.display = 'none'; return; }
     for (const m of matches) {
@@ -348,7 +348,7 @@ async function addSymbol(sym) {
   acBox.style.display = 'none';
   addInput.value = '';
   if (!sym) return;
-  const result = await api('/api/watchlist', {
+  const result = await api('api/watchlist', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol: sym }),
@@ -369,7 +369,7 @@ function currentRange() {
 }
 
 async function loadEarnings(range) {
-  const rows = await api('/api/earnings?range=' + range);
+  const rows = await api('api/earnings?range=' + range);
   const box = document.getElementById('earnings-list');
   if (!rows.length) {
     box.innerHTML = '<div class="empty">No earnings in this range.</div>';

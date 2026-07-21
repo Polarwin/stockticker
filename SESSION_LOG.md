@@ -271,6 +271,28 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 14. Nginx Reverse Proxy at /stockticker
+
+**Asked:** Instead of exposing the Flask UI directly on 0.0.0.0:8000, deploy nginx so the UI is served at http://192.168.0.9/stockticker, via an install script.
+
+**Done:**
+- Changed `web_host` in `settings.json` back to "127.0.0.1" — Flask now listens on localhost only; nginx is the LAN entry point.
+- Changed all frontend fetch paths in `static/index.html` from absolute (`/api/...`) to relative (`api/...`) so the page works both under the `/stockticker/` prefix and when served directly by Flask.
+- Created `install_nginx.sh` (requires sudo, run by the user):
+  - Reads `web_host`/`web_port` from `settings.json` for the proxy target.
+  - Installs nginx via apt if missing.
+  - Writes `/etc/nginx/sites-available/stockticker`: `listen 80 default_server`, `location = /stockticker` → 301 to `/stockticker/`, and `location /stockticker/` → `proxy_pass http://127.0.0.1:8000/` (trailing slash strips the prefix, so Flask keeps its plain `/` and `/api/...` routes) with standard `X-Forwarded-*` headers.
+  - Removes the stock `sites-enabled/default` placeholder, symlinks the site, runs `nginx -t`, then reloads (or enables/starts) nginx.
+  - Prints the LAN URL and a cheat sheet.
+- Restarted the running `web.py` (no systemd service installed yet): now bound to 127.0.0.1:8000, verified with curl (`/api/watchlist` → 200, served HTML uses relative `api/` paths).
+- `bash -n install_nginx.sh` passes. The nginx side itself could not be tested here — installing and reloading nginx needs the user's sudo password; run `bash install_nginx.sh`, then open http://192.168.0.9/stockticker.
+
+**Key decisions:**
+- Prefix stripping in nginx (`proxy_pass ...:8000/;`) instead of teaching Flask about the subpath — zero backend changes, and direct localhost access to Flask keeps working for debugging.
+- The nginx server block takes over `default_server` on port 80 (only the placeholder welcome page is displaced).
+
+---
+
 ## Final Project State
 
 **Tracked files:**
@@ -279,6 +301,7 @@ This log records the work done in this CLI session, in chronological order.
 - `db.py`
 - `dedup_watchlist.py`
 - `earnings_reminder.py`
+- `install_nginx.sh`
 - `install_service.sh`
 - `main.py`
 - `notify.py`
@@ -299,6 +322,7 @@ This log records the work done in this CLI session, in chronological order.
 - `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current); `--update-earnings` refreshes only the earnings table.
 - `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
 - `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8000): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar.
+- `bash install_nginx.sh` (requires sudo) deploys nginx as a reverse proxy so the UI is reachable on the LAN at http://<LAN-IP>/stockticker while Flask stays on localhost.
 - All schedule/market/earnings/db/web settings live in `settings.json`; missing file falls back to built-in defaults with a warning.
 - `bash install_service.sh` (requires sudo) installs the watcher and the web UI as systemd services.
 - `bash uninstall_service.sh` (requires sudo) removes both.
