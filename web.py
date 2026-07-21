@@ -136,6 +136,32 @@ def search_static(query: str) -> list[dict]:
     return (prefix + substring)[:10]
 
 
+@app.get("/api/quotes")
+def api_quotes():
+    """Latest close and % change vs the previous day for each watchlist symbol."""
+    conn = open_db()
+    quotes = {}
+    try:
+        for symbol in read_watchlist():
+            rows = conn.execute(
+                """
+                SELECT close FROM daily_prices
+                WHERE symbol = ? ORDER BY date DESC LIMIT 2
+                """,
+                (symbol,),
+            ).fetchall()
+            if not rows or rows[0][0] is None:
+                continue
+            price = rows[0][0]
+            change_pct = None
+            if len(rows) == 2 and rows[1][0]:
+                change_pct = round((price - rows[1][0]) / rows[1][0] * 100, 2)
+            quotes[symbol] = {"price": round(price, 2), "change_pct": change_pct}
+    finally:
+        conn.close()
+    return jsonify(quotes)
+
+
 @app.get("/api/search")
 def api_search():
     query = (request.args.get("q") or "").strip()

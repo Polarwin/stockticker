@@ -324,6 +324,28 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 17. Web UI Usability Improvements
+
+**Asked:** Make the website more user-friendly.
+
+**Done:**
+- `web.py`: new `GET /api/quotes` returning latest close + % change vs previous day per watchlist symbol (from `daily_prices`).
+- Rewrote `static/index.html`:
+  - Watchlist rows now show live price and a green/red % change badge next to each symbol; delete button appears on hover and asks for confirmation (noting that price history is kept).
+  - Autocomplete supports keyboard navigation (↑/↓ to move, Enter to pick, Esc to close) in addition to mouse.
+  - Chart header: OHLC legend that follows the crosshair (falls back to the latest bar), color-coded close and % change; range buttons (1M/3M/6M/1Y) via visible logical range; a "Loading…" overlay while fetching.
+  - MA toggle states and the selected symbol persist in `localStorage` across visits.
+  - Earnings calendar rows are clickable (jump to that symbol's chart) and show an "In N days" column.
+  - Error toasts instead of silent failures/alerts; the UI degrades gracefully when `/api/quotes` is unavailable (older backend before restart).
+  - Header hint line and small polish (focus ring on input, scrollable watchlist, tighter mobile layout).
+- Tested via Flask `test_client`: `/api/quotes` returns 42 symbols (IBM +0.16%, AAPL -2.14%, matching the ticker's % change), all existing endpoints still 200.
+
+**Key decisions:**
+- Quotes come from the local DB (not live fetches) so the watchlist loads instantly; values match the last ticker/collector update.
+- The frontend tolerates a missing `/api/quotes` so the page keeps working until the `stockticker-web` service is restarted (needs the user's sudo).
+
+---
+
 ## Final Project State
 
 **Tracked files:**

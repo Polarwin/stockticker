@@ -13,6 +13,8 @@
     --text: #d1d4dc;
     --muted: #787b86;
     --accent: #2962ff;
+    --up: #089981;
+    --down: #f23645;
   }
   * { box-sizing: border-box; }
   body {
@@ -25,20 +27,22 @@
     padding: 10px 16px;
     border-bottom: 1px solid var(--border);
     font-weight: 600;
-  }
-  .layout {
     display: flex;
-    gap: 12px;
-    padding: 12px 16px;
+    justify-content: space-between;
+    align-items: center;
   }
+  header .hint { font-weight: 400; font-size: 12px; color: var(--muted); }
+  .layout { display: flex; gap: 12px; padding: 12px 16px; }
   .panel {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 12px;
   }
-  #watchlist-panel { width: 280px; flex-shrink: 0; }
+  #watchlist-panel { width: 300px; flex-shrink: 0; }
   #chart-panel { flex-grow: 1; min-width: 0; }
+
+  /* --- add symbol --- */
   #add-row { display: flex; gap: 6px; position: relative; }
   #add-input {
     flex-grow: 1;
@@ -46,17 +50,20 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     color: var(--text);
-    padding: 6px 8px;
+    padding: 8px 10px;
     text-transform: uppercase;
+    outline: none;
   }
+  #add-input:focus { border-color: var(--accent); }
   #add-btn {
     background: var(--accent);
     border: none;
     border-radius: 4px;
     color: #fff;
-    padding: 6px 12px;
+    padding: 8px 14px;
     cursor: pointer;
   }
+  #add-btn:hover { filter: brightness(1.15); }
   #autocomplete {
     position: absolute;
     top: 100%;
@@ -67,36 +74,48 @@
     border-radius: 4px;
     z-index: 10;
     display: none;
-    max-height: 240px;
+    max-height: 260px;
     overflow-y: auto;
   }
-  #autocomplete div {
-    padding: 6px 8px;
-    cursor: pointer;
-  }
-  #autocomplete div:hover { background: var(--panel); }
+  #autocomplete div { padding: 7px 10px; cursor: pointer; }
+  #autocomplete div:hover, #autocomplete div.active { background: var(--panel); }
   #autocomplete .sym { font-weight: 600; }
   #autocomplete .name { color: var(--muted); font-size: 12px; margin-left: 6px; }
-  #watchlist { list-style: none; margin: 12px 0 0; padding: 0; }
+
+  /* --- watchlist --- */
+  #watchlist { list-style: none; margin: 12px 0 0; padding: 0; max-height: 520px; overflow-y: auto; }
   #watchlist li {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 6px 8px;
+    padding: 7px 8px;
     border-radius: 4px;
     cursor: pointer;
+    gap: 6px;
   }
   #watchlist li:hover { background: var(--bg); }
-  #watchlist li.selected { background: var(--accent); color: #fff; }
+  #watchlist li.selected { background: var(--accent); }
+  #watchlist li.selected .quote, #watchlist li.selected .chg { color: #fff; }
+  .wl-sym { font-weight: 600; flex-grow: 1; }
+  .wl-right { text-align: right; line-height: 1.2; }
+  .quote { font-size: 13px; }
+  .chg { font-size: 11px; }
+  .chg.up { color: var(--up); }
+  .chg.down { color: var(--down); }
+  .chg.na { color: var(--muted); }
   .del-btn {
     background: none;
     border: none;
     color: var(--muted);
     cursor: pointer;
-    font-size: 14px;
-    padding: 0 4px;
+    font-size: 13px;
+    padding: 2px 4px;
+    border-radius: 3px;
+    visibility: hidden;
   }
-  .del-btn:hover { color: #f23645; }
+  #watchlist li:hover .del-btn { visibility: visible; }
+  .del-btn:hover { color: var(--down); background: var(--panel); }
+
+  /* --- chart --- */
   #chart-header {
     display: flex;
     align-items: center;
@@ -105,6 +124,7 @@
     margin-bottom: 8px;
   }
   #chart-symbol { font-size: 18px; font-weight: 600; }
+  #ohlc-legend { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   #earnings-badge {
     background: #4a3800;
     color: #ffcc4d;
@@ -119,7 +139,31 @@
     margin-right: 8px;
     cursor: pointer;
   }
-  #chart { width: 100%; height: 420px; }
+  .range-btns { margin-left: auto; }
+  .range-btns button {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--muted);
+    padding: 4px 10px;
+    margin-left: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .range-btns button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #chart-wrap { position: relative; }
+  #chart { width: 100%; height: 440px; }
+  #chart-loading {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    background: rgba(30, 34, 45, 0.7);
+  }
+
+  /* --- earnings calendar --- */
   #calendar-panel { margin: 0 16px 16px; }
   .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
   .tab {
@@ -134,20 +178,44 @@
   #earnings-list table { width: 100%; border-collapse: collapse; font-size: 14px; }
   #earnings-list td, #earnings-list th {
     text-align: left;
-    padding: 6px 8px;
+    padding: 7px 8px;
     border-bottom: 1px solid var(--border);
   }
   #earnings-list th { color: var(--muted); font-weight: 500; }
+  #earnings-list tbody tr { cursor: pointer; }
+  #earnings-list tbody tr:hover { background: var(--bg); }
   .empty { color: var(--muted); padding: 8px; }
+
+  /* --- toast --- */
+  #toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--down);
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: 6px;
+    font-size: 14px;
+    display: none;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+
   @media (max-width: 768px) {
     .layout { flex-direction: column; }
     #watchlist-panel { width: 100%; }
+    #watchlist { max-height: 260px; }
     #chart { height: 320px; }
+    .range-btns { margin-left: 0; }
   }
 </style>
 </head>
 <body>
-<header>📈 Stockticker</header>
+<header>
+  <span>📈 Stockticker</span>
+  <span class="hint">Click a symbol to view its chart · hover the chart for OHLC</span>
+</header>
 
 <div class="layout">
   <div class="panel" id="watchlist-panel">
@@ -162,6 +230,7 @@
   <div class="panel" id="chart-panel">
     <div id="chart-header">
       <span id="chart-symbol">Select a symbol</span>
+      <span id="ohlc-legend"></span>
       <span id="earnings-badge"></span>
       <span class="ma-toggles">
         <label><input type="checkbox" data-ma="sma5" checked> MA5</label>
@@ -169,8 +238,17 @@
         <label><input type="checkbox" data-ma="sma50"> MA50</label>
         <label><input type="checkbox" data-ma="sma200"> MA200</label>
       </span>
+      <span class="range-btns">
+        <button data-range="21">1M</button>
+        <button data-range="63">3M</button>
+        <button data-range="126">6M</button>
+        <button data-range="0" class="active">1Y</button>
+      </span>
     </div>
-    <div id="chart"></div>
+    <div id="chart-wrap">
+      <div id="chart"></div>
+      <div id="chart-loading">Loading…</div>
+    </div>
   </div>
 </div>
 
@@ -183,6 +261,8 @@
   <div id="earnings-list"></div>
 </div>
 
+<div id="toast"></div>
+
 <script>
 const MA_COLORS = { sma5: '#2962ff', sma20: '#ff9800', sma50: '#9c27b0', sma200: '#f23645' };
 
@@ -193,28 +273,71 @@ let candleSeries = null;
 let maSeries = {};
 let priceData = null;
 
+// --- helpers ---
 async function api(path, options) {
   const resp = await fetch(path, options);
+  if (!resp.ok) throw new Error('Request failed: ' + resp.status);
   return resp.json();
 }
 
-async function loadConfig() {
-  const cfg = await api('api/config');
-  remindDays = cfg.earnings_remind_days;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = '';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.display = 'none'; }, 4000);
 }
 
+function fmtPct(v) {
+  if (v == null) return '—';
+  return (v > 0 ? '+' : '') + v.toFixed(2) + '%';
+}
+
+// --- config & quotes ---
+async function loadConfig() {
+  try {
+    const cfg = await api('api/config');
+    remindDays = cfg.earnings_remind_days;
+  } catch (e) { /* keep default */ }
+}
+
+async function loadQuotes() {
+  try {
+    return await api('api/quotes');
+  } catch (e) {
+    return {}; // older backend without /api/quotes: rows just show no price
+  }
+}
+
+// --- watchlist ---
 async function loadWatchlist() {
-  const symbols = await api('api/watchlist');
+  let symbols, quotes;
+  try {
+    [symbols, quotes] = await Promise.all([api('api/watchlist'), loadQuotes()]);
+  } catch (e) {
+    toast('Failed to load watchlist');
+    return;
+  }
   const ul = document.getElementById('watchlist');
   ul.innerHTML = '';
   for (const sym of symbols) {
+    const q = quotes[sym] || {};
     const li = document.createElement('li');
     li.dataset.symbol = sym;
     if (sym === currentSymbol) li.classList.add('selected');
 
     const label = document.createElement('span');
+    label.className = 'wl-sym';
     label.textContent = sym;
     label.addEventListener('click', () => selectSymbol(sym));
+
+    const right = document.createElement('span');
+    right.className = 'wl-right';
+    const chgClass = q.change_pct == null ? 'na' : (q.change_pct >= 0 ? 'up' : 'down');
+    right.innerHTML =
+      '<div class="quote">' + (q.price != null ? '$' + q.price.toFixed(2) : '') + '</div>' +
+      '<div class="chg ' + chgClass + '">' + fmtPct(q.change_pct) + '</div>';
+    right.addEventListener('click', () => selectSymbol(sym));
 
     const del = document.createElement('button');
     del.className = 'del-btn';
@@ -222,20 +345,26 @@ async function loadWatchlist() {
     del.title = 'Remove ' + sym;
     del.addEventListener('click', async (e) => {
       e.stopPropagation();
-      await api('api/watchlist/' + encodeURIComponent(sym), { method: 'DELETE' });
+      if (!confirm('Remove ' + sym + ' from the watchlist? (price history is kept)')) return;
+      try {
+        await api('api/watchlist/' + encodeURIComponent(sym), { method: 'DELETE' });
+      } catch (err) { toast('Delete failed'); return; }
       if (currentSymbol === sym) { currentSymbol = null; clearChart(); }
       loadWatchlist();
       loadEarnings(currentRange());
     });
 
     li.appendChild(label);
+    li.appendChild(right);
     li.appendChild(del);
     ul.appendChild(li);
   }
 }
 
+// --- chart ---
 function clearChart() {
   document.getElementById('chart-symbol').textContent = 'Select a symbol';
+  document.getElementById('ohlc-legend').textContent = '';
   document.getElementById('earnings-badge').style.display = 'none';
   if (chart) { chart.remove(); chart = null; candleSeries = null; maSeries = {}; }
 }
@@ -243,16 +372,11 @@ function clearChart() {
 function buildChart() {
   if (chart) chart.remove();
   chart = LightweightCharts.createChart(document.getElementById('chart'), {
-    layout: {
-      background: { color: '#1e222d' },
-      textColor: '#d1d4dc',
-    },
-    grid: {
-      vertLines: { color: '#2a2e39' },
-      horzLines: { color: '#2a2e39' },
-    },
+    layout: { background: { color: '#1e222d' }, textColor: '#d1d4dc' },
+    grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
     timeScale: { borderColor: '#2a2e39' },
     rightPriceScale: { borderColor: '#2a2e39' },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     autoSize: true,
   });
   candleSeries = chart.addCandlestickSeries({
@@ -264,65 +388,137 @@ function buildChart() {
   for (const [key, color] of Object.entries(MA_COLORS)) {
     maSeries[key] = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false });
   }
+  chart.subscribeCrosshairMove((param) => {
+    const legend = document.getElementById('ohlc-legend');
+    const bar = param.seriesData && param.seriesData.get(candleSeries);
+    if (!bar) { updateLegend(null); return; }
+    updateLegend(bar);
+  });
+}
+
+function updateLegend(bar) {
+  const legend = document.getElementById('ohlc-legend');
+  if (!bar && priceData && priceData.ohlc.length) bar = priceData.ohlc[priceData.ohlc.length - 1];
+  if (!bar) { legend.textContent = ''; return; }
+  const dir = bar.close >= bar.open ? 'up' : 'down';
+  const pct = bar.open ? ((bar.close - bar.open) / bar.open * 100) : 0;
+  legend.innerHTML =
+    'O <b>' + bar.open.toFixed(2) + '</b> H <b>' + bar.high.toFixed(2) +
+    '</b> L <b>' + bar.low.toFixed(2) + '</b> C <b style="color:var(--' + dir + ')">' +
+    bar.close.toFixed(2) + '</b> <span style="color:var(--' + dir + ')">' + fmtPct(pct) + '</span>';
 }
 
 function renderSeries() {
   if (!priceData || !candleSeries) return;
   candleSeries.setData(priceData.ohlc.filter(p => p.open != null && p.close != null));
   document.querySelectorAll('.ma-toggles input').forEach(cb => {
-    const key = cb.dataset.ma;
-    const series = maSeries[key];
+    const series = maSeries[cb.dataset.ma];
     if (!series) return;
     if (!cb.checked) { series.setData([]); return; }
     const pts = [];
     priceData.dates.forEach((d, i) => {
-      const v = priceData[key][i];
+      const v = priceData[cb.dataset.ma][i];
       if (v != null) pts.push({ time: d, value: v });
     });
     series.setData(pts);
   });
-  chart.timeScale().fitContent();
+  applyRange(currentVisibleRange());
+  updateLegend(null);
+}
+
+function currentVisibleRange() {
+  return parseInt(document.querySelector('.range-btns button.active').dataset.range, 10);
+}
+
+function applyRange(days) {
+  if (!chart || !priceData || !priceData.dates.length) return;
+  const n = priceData.dates.length;
+  if (!days || days >= n) {
+    chart.timeScale().fitContent();
+  } else {
+    chart.timeScale().setVisibleLogicalRange({ from: n - days, to: n - 1 });
+  }
 }
 
 async function selectSymbol(sym) {
   currentSymbol = sym;
+  try { localStorage.setItem('selectedSymbol', sym); } catch (e) {}
   document.querySelectorAll('#watchlist li').forEach(li =>
     li.classList.toggle('selected', li.dataset.symbol === sym));
   document.getElementById('chart-symbol').textContent = sym;
+  document.getElementById('chart-loading').style.display = 'flex';
 
-  const [prices, status] = await Promise.all([
-    api('api/prices/' + encodeURIComponent(sym)),
-    api('api/status/' + encodeURIComponent(sym)),
-  ]);
+  try {
+    const [prices, status] = await Promise.all([
+      api('api/prices/' + encodeURIComponent(sym)),
+      api('api/status/' + encodeURIComponent(sym)),
+    ]);
 
-  const badge = document.getElementById('earnings-badge');
-  if (status && status.days_until <= remindDays) {
-    const eps = status.eps_estimate == null ? 'N/A' : status.eps_estimate;
-    badge.textContent = '📅 Earnings in ' + status.days_until +
-      (status.days_until === 1 ? ' day' : ' days') + ' — EPS est ' + eps;
-    badge.style.display = '';
-  } else {
-    badge.style.display = 'none';
+    const badge = document.getElementById('earnings-badge');
+    if (status && status.days_until <= remindDays) {
+      const eps = status.eps_estimate == null ? 'N/A' : status.eps_estimate;
+      badge.textContent = '📅 Earnings in ' + status.days_until +
+        (status.days_until === 1 ? ' day' : ' days') + ' — EPS est ' + eps;
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+
+    priceData = prices;
+    if (!chart) buildChart();
+    renderSeries();
+  } catch (e) {
+    toast('Failed to load data for ' + sym);
+  } finally {
+    document.getElementById('chart-loading').style.display = 'none';
   }
-
-  priceData = prices;
-  if (!chart) buildChart();
-  renderSeries();
 }
 
-// --- Add symbol with autocomplete ---
+// --- range buttons ---
+document.querySelectorAll('.range-btns button').forEach(btn =>
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.range-btns button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    applyRange(parseInt(btn.dataset.range, 10));
+  }));
+
+// --- MA toggles (persisted) ---
+document.querySelectorAll('.ma-toggles input').forEach(cb => {
+  try {
+    const saved = localStorage.getItem('ma_' + cb.dataset.ma);
+    if (saved !== null) cb.checked = saved === '1';
+  } catch (e) {}
+  cb.addEventListener('change', () => {
+    try { localStorage.setItem('ma_' + cb.dataset.ma, cb.checked ? '1' : '0'); } catch (e) {}
+    renderSeries();
+  });
+});
+
+// --- add symbol with autocomplete ---
 const addInput = document.getElementById('add-input');
 const acBox = document.getElementById('autocomplete');
 let acTimer = null;
+let acIndex = -1;
+
+function acClose() { acBox.style.display = 'none'; acIndex = -1; }
+
+function acHighlight() {
+  acBox.querySelectorAll('div').forEach((d, i) =>
+    d.classList.toggle('active', i === acIndex));
+}
 
 addInput.addEventListener('input', () => {
   clearTimeout(acTimer);
   const q = addInput.value.trim();
-  if (!q) { acBox.style.display = 'none'; return; }
+  if (!q) { acClose(); return; }
   acTimer = setTimeout(async () => {
-    const matches = await api('api/search?q=' + encodeURIComponent(q));
+    let matches;
+    try {
+      matches = await api('api/search?q=' + encodeURIComponent(q));
+    } catch (e) { acClose(); return; }
     acBox.innerHTML = '';
-    if (!matches.length) { acBox.style.display = 'none'; return; }
+    acIndex = -1;
+    if (!matches.length) { acClose(); return; }
     for (const m of matches) {
       const div = document.createElement('div');
       div.innerHTML = '<span class="sym"></span><span class="name"></span>';
@@ -336,55 +532,82 @@ addInput.addEventListener('input', () => {
 });
 
 addInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') addSymbol(addInput.value.trim().toUpperCase());
-  if (e.key === 'Escape') acBox.style.display = 'none';
+  const items = acBox.querySelectorAll('div');
+  if (e.key === 'ArrowDown' && items.length) {
+    e.preventDefault();
+    acIndex = (acIndex + 1) % items.length;
+    acHighlight();
+  } else if (e.key === 'ArrowUp' && items.length) {
+    e.preventDefault();
+    acIndex = (acIndex - 1 + items.length) % items.length;
+    acHighlight();
+  } else if (e.key === 'Enter') {
+    if (acIndex >= 0 && items[acIndex]) {
+      addSymbol(items[acIndex].querySelector('.sym').textContent);
+    } else {
+      addSymbol(addInput.value.trim().toUpperCase());
+    }
+  } else if (e.key === 'Escape') {
+    acClose();
+  }
 });
 
 document.addEventListener('click', (e) => {
-  if (!acBox.contains(e.target) && e.target !== addInput) acBox.style.display = 'none';
+  if (!acBox.contains(e.target) && e.target !== addInput) acClose();
 });
 
 async function addSymbol(sym) {
-  acBox.style.display = 'none';
+  acClose();
   addInput.value = '';
   if (!sym) return;
-  const result = await api('api/watchlist', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol: sym }),
-  });
-  if (result.error) { alert(result.error); return; }
+  let result;
+  try {
+    result = await api('api/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: sym }),
+    });
+  } catch (e) { toast('Failed to add ' + sym); return; }
+  if (result.error) { toast(result.error); return; }
   await loadWatchlist();
   selectSymbol(sym);
   loadEarnings(currentRange());
 }
 
-// --- MA toggles ---
-document.querySelectorAll('.ma-toggles input').forEach(cb =>
-  cb.addEventListener('change', renderSeries));
-
-// --- Earnings calendar tabs ---
+// --- earnings calendar ---
 function currentRange() {
   return document.querySelector('.tab.active').dataset.range;
 }
 
 async function loadEarnings(range) {
-  const rows = await api('api/earnings?range=' + range);
+  let rows;
+  try {
+    rows = await api('api/earnings?range=' + range);
+  } catch (e) {
+    toast('Failed to load earnings');
+    return;
+  }
   const box = document.getElementById('earnings-list');
   if (!rows.length) {
     box.innerHTML = '<div class="empty">No earnings in this range.</div>';
     return;
   }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
   const table = document.createElement('table');
-  table.innerHTML = '<tr><th>Date</th><th>Symbol</th><th>EPS est</th></tr>';
+  table.innerHTML = '<thead><tr><th>Date</th><th>Symbol</th><th>EPS est</th><th>In</th></tr></thead><tbody></tbody>';
+  const tbody = table.querySelector('tbody');
   for (const r of rows) {
+    const d = new Date(r.earnings_date + 'T00:00:00');
+    const days = Math.round((d - today) / 86400000);
     const tr = document.createElement('tr');
-    const eps = r.eps_estimate == null ? 'N/A' : r.eps_estimate;
-    tr.innerHTML = '<td></td><td></td><td></td>';
+    tr.innerHTML = '<td></td><td><b></b></td><td></td><td></td>';
     tr.children[0].textContent = r.earnings_date;
-    tr.children[1].textContent = r.symbol;
-    tr.children[2].textContent = eps;
-    table.appendChild(tr);
+    tr.children[1].firstChild.textContent = r.symbol;
+    tr.children[2].textContent = r.eps_estimate == null ? 'N/A' : r.eps_estimate;
+    tr.children[3].textContent = days === 0 ? 'today' : days + (days === 1 ? ' day' : ' days');
+    tr.addEventListener('click', () => selectSymbol(r.symbol));
+    tbody.appendChild(tr);
   }
   box.innerHTML = '';
   box.appendChild(table);
@@ -397,12 +620,15 @@ document.querySelectorAll('.tab').forEach(tab =>
     loadEarnings(tab.dataset.range);
   }));
 
-// --- Init ---
+// --- init ---
 (async () => {
   await loadConfig();
   await loadWatchlist();
   loadEarnings('week');
-  const first = document.querySelector('#watchlist li');
+  let initial = null;
+  try { initial = localStorage.getItem('selectedSymbol'); } catch (e) {}
+  const li = initial && document.querySelector('#watchlist li[data-symbol="' + initial + '"]');
+  const first = li || document.querySelector('#watchlist li');
   if (first) selectSymbol(first.dataset.symbol);
 })();
 </script>
