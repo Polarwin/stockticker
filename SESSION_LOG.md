@@ -403,6 +403,29 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 22. Fix Autocomplete Dropdown, Legend % Change, Calendar Placement
+
+**Asked:** Dropdown doesn't appear (user verified with a screenshot and hard refresh — not a cache issue). Instrument the input handler, add a debug line, verify dropdown CSS against the real DOM, unify the % change definition (watchlist vs chart legend disagreed for BABA), and make the earnings calendar visible (move it above the chart). Verify by actually opening the page.
+
+**Done:**
+- Root cause found: the render code showed the dropdown with `acBox.style.display = ''`, which removes the inline style and falls back to the stylesheet rule `display: none` — the dropdown was populated but never visible. Fixed to `display = 'block'`.
+- Input handler now logs the fetched suggestions to the console and wraps rendering in try/catch (errors logged, not silent); suggestion DOM nodes are built with `createElement`/`textContent` (no innerHTML, null-name safe).
+- Added the requested debug line under the input: `debug: N suggestions received` (`#ac-debug`).
+- CSS verified against the live DOM (not just by reading code): `position: absolute`, `z-index: 1000` (raised from 10), solid background, no `overflow: hidden` ancestors.
+- % change unified to "vs previous close" everywhere: the chart legend previously computed intraday `(close-open)/open` (BABA showed +1.20% vs watchlist +4.67%); the crosshair handler now looks up the hovered bar's previous close and the default legend uses the last two bars.
+- Moved the earnings calendar panel above the watchlist/chart layout so it's visible without scrolling.
+- Verified with headless Chromium (Playwright, installed in the venv) against the nginx-served page (`/stockticker/`):
+  - Console: `autocomplete suggestions for "pl": [Object]` — no exceptions, no page errors.
+  - Debug line: `debug: 1 suggestions received` ("PL"; the EQUITY/ETF/INDEX filter trims Yahoo's exotics).
+  - Dropdown: `display: block`, `position: absolute`, `z-index: 1000`, solid background, real bounding box (274×35 below the input), zero `overflow:hidden` ancestors.
+  - Calendar renders at top=40, above the chart (top=319), with 5 rows for "This week".
+  - BABA consistency: watchlist `+4.67%` == legend `C 120.34 +4.67%`.
+
+**Key decisions:**
+- Playwright + chromium-headless-shell installed into the project venv (gitignored) for DOM verification — no more guessing about frontend behavior.
+
+---
+
 ## Final Project State
 
 **Tracked files:**

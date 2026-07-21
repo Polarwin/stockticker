@@ -72,11 +72,12 @@
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 4px;
-    z-index: 10;
+    z-index: 1000;
     display: none;
     max-height: 260px;
     overflow-y: auto;
   }
+  #ac-debug { color: var(--muted); font-size: 11px; margin-top: 4px; min-height: 13px; }
   #autocomplete div { padding: 7px 10px; cursor: pointer; }
   #autocomplete div:hover, #autocomplete div.active { background: var(--panel); }
   #autocomplete .sym { font-weight: 600; }
@@ -217,6 +218,15 @@
   <span class="hint">Click a symbol to view its chart · hover the chart for OHLC</span>
 </header>
 
+<div class="panel" id="calendar-panel">
+  <div class="tabs">
+    <button class="tab active" data-range="week">This week</button>
+    <button class="tab" data-range="next-week">Next week</button>
+    <button class="tab" data-range="month">This month</button>
+  </div>
+  <div id="earnings-list"></div>
+</div>
+
 <div class="layout">
   <div class="panel" id="watchlist-panel">
     <div id="add-row">
@@ -224,6 +234,7 @@
       <button id="add-btn">Add</button>
       <div id="autocomplete"></div>
     </div>
+    <div id="ac-debug"></div>
     <ul id="watchlist"></ul>
   </div>
 
@@ -250,15 +261,6 @@
       <div id="chart-loading">Loading…</div>
     </div>
   </div>
-</div>
-
-<div class="panel" id="calendar-panel">
-  <div class="tabs">
-    <button class="tab active" data-range="week">This week</button>
-    <button class="tab" data-range="next-week">Next week</button>
-    <button class="tab" data-range="month">This month</button>
-  </div>
-  <div id="earnings-list"></div>
 </div>
 
 <div id="toast"></div>
@@ -408,19 +410,27 @@ function buildChart() {
     maSeries[key] = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false });
   }
   chart.subscribeCrosshairMove((param) => {
-    const legend = document.getElementById('ohlc-legend');
     const bar = param.seriesData && param.seriesData.get(candleSeries);
-    if (!bar) { updateLegend(null); return; }
-    updateLegend(bar);
+    if (!bar || !priceData) { updateLegend(null); return; }
+    const idx = priceData.dates.indexOf(param.time);
+    const prevClose = idx > 0 ? priceData.ohlc[idx - 1].close : null;
+    updateLegend(bar, prevClose);
   });
 }
 
-function updateLegend(bar) {
+function updateLegend(bar, prevClose) {
   const legend = document.getElementById('ohlc-legend');
-  if (!bar && priceData && priceData.ohlc.length) bar = priceData.ohlc[priceData.ohlc.length - 1];
-  if (!bar) { legend.textContent = ''; return; }
-  const dir = bar.close >= bar.open ? 'up' : 'down';
-  const pct = bar.open ? ((bar.close - bar.open) / bar.open * 100) : 0;
+  if (!bar && priceData && priceData.ohlc.length) {
+    const n = priceData.ohlc.length;
+    bar = priceData.ohlc[n - 1];
+    prevClose = n > 1 ? priceData.ohlc[n - 2].close : null;
+  }
+  if (!bar || bar.close == null) { legend.textContent = ''; return; }
+  // % change vs previous close (falls back to open for the first bar),
+  // matching the watchlist and console ticker definition.
+  const ref = prevClose || bar.open;
+  const pct = ref ? ((bar.close - ref) / ref * 100) : 0;
+  const dir = bar.close >= ref ? 'up' : 'down';
   legend.innerHTML =
     'O <b>' + bar.open.toFixed(2) + '</b> H <b>' + bar.high.toFixed(2) +
     '</b> L <b>' + bar.low.toFixed(2) + '</b> C <b style="color:var(--' + dir + ')">' +
@@ -575,24 +585,42 @@ function acHighlight() {
 addInput.addEventListener('input', () => {
   clearTimeout(acTimer);
   const q = addInput.value.trim();
-  if (!q) { acClose(); return; }
+  const dbg = document.getElementById('ac-debug');
+  if (!q) { acClose(); dbg.textContent = ''; return; }
   acTimer = setTimeout(async () => {
     let matches;
     try {
       matches = await api('api/search?q=' + encodeURIComponent(q));
-    } catch (e) { acClose(); return; }
-    acBox.innerHTML = '';
-    acIndex = -1;
-    if (!matches.length) { acClose(); return; }
-    for (const m of matches) {
-      const div = document.createElement('div');
-      div.innerHTML = '<span class="sym"></span><span class="name"></span>';
-      div.querySelector('.sym').textContent = m.symbol;
-      div.querySelector('.name').textContent = m.name;
-      div.addEventListener('click', () => addSymbol(m.symbol));
-      acBox.appendChild(div);
+    } catch (e) {
+      console.error('autocomplete fetch failed:', e);
+      dbg.textContent = 'debug: search request failed';
+      acClose();
+      return;
     }
-    acBox.style.display = '';
+    console.log('autocomplete suggestions for "' + q + '":', matches);
+    dbg.textContent = 'debug: ' + matches.length + ' suggestions received';
+    try {
+      acBox.innerHTML = '';
+      acIndex = -1;
+      if (!matches.length) { acClose(); return; }
+      for (const m of matches) {
+        const div = document.createElement('div');
+        const sym = document.createElement('span');
+        sym.className = 'sym';
+        sym.textContent = m.symbol;
+        const name = document.createElement('span');
+        name.className = 'name';
+        name.textContent = m.name || '';
+        div.appendChild(sym);
+        div.appendChild(name);
+        div.addEventListener('click', () => addSymbol(m.symbol));
+        acBox.appendChild(div);
+      }
+      acBox.style.display = 'block';
+    } catch (e) {
+      console.error('autocomplete render failed:', e);
+      dbg.textContent = 'debug: render error (see console)';
+    }
   }, 250);
 });
 
