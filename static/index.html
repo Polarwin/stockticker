@@ -621,6 +621,10 @@ document.addEventListener('click', (e) => {
   if (!acBox.contains(e.target) && e.target !== addInput) acClose();
 });
 
+document.getElementById('add-btn').addEventListener('click', () => {
+  addSymbol(addInput.value.trim().toUpperCase());
+});
+
 async function addSymbol(sym) {
   acClose();
   addInput.value = '';

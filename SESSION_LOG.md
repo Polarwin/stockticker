@@ -377,6 +377,20 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 20. Fix Add Button
+
+**Asked:** "Add symbol" doesn't work (tried PLTR); also wants a confirmation when removing a symbol.
+
+**Done:**
+- Reproduced: the backend was fine — `POST /api/watchlist {"symbol":"PLTR"}` succeeded (PLTR added with 1y history + earnings, now showing $134.85 +1.87%), and the web log showed the user's searches but never a POST. Root cause: the `#add-btn` button never had a click handler — only autocomplete click/Enter worked, since the first version of the page.
+- Added the missing `add-btn` click listener (adds the uppercased input value). Verified the inline JS with `node --check`.
+- Delete confirmation already exists since the usability rewrite (`confirm('Remove X from the watchlist? (price history is kept)')` in the delete handler) — the user likely had a cached page; hard refresh (Ctrl+F5) shows it.
+
+**Key decisions:**
+- Left PLTR in the watchlist (added during the reproduction) since that's what the user wanted.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
