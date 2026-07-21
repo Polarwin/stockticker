@@ -7,7 +7,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
-from db import get_meta, init_db, resolve_db_path, set_meta, upsert_prices
+from db import get_meta, init_db, resolve_db_path, set_meta, upsert_earnings, upsert_prices
+from earnings_reminder import get_earnings_info
 from ticker import load_watchlist
 
 LAST_UPDATE_KEY = "last_update_date"
@@ -106,6 +107,49 @@ def update_database(settings: dict, test: bool = False) -> tuple[int, int]:
             f"{timestamp} DB updated: {symbols_updated} symbols, "
             f"{rows_total} rows total"
         )
+
+        earnings_updated = update_earnings(settings, test=test, conn=conn)
+
         return symbols_updated, rows_total
     finally:
         conn.close()
+
+
+def update_earnings(settings: dict, test: bool = False, conn=None) -> int:
+    """Refresh the earnings table from yfinance Ticker.calendar.
+
+    For each watchlist symbol, upserts 'Earnings Date'[0] and
+    'Earnings Average' into the earnings table. Per-symbol errors warn and
+    skip. Console log only; no Telegram message.
+
+    Returns the number of symbols with an earnings date upserted.
+    """
+    market_tz = ZoneInfo(settings["market_timezone"])
+    now = datetime.now(market_tz)
+    timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    updated_at = now.isoformat()
+
+    own_conn = conn is None
+    if own_conn:
+        conn = init_db(resolve_db_path(settings["db_path"]))
+    try:
+        upserted = 0
+        for symbol in load_watchlist():
+            try:
+                info = get_earnings_info(symbol)
+            except ValueError as exc:
+                print(f"Warning: {exc}", file=sys.stderr)
+                continue
+            if info is None:
+                continue
+            _symbol, earnings_date, eps = info
+            upsert_earnings(
+                conn, symbol, earnings_date.isoformat(), eps, updated_at
+            )
+            upserted += 1
+        conn.commit()
+        print(f"{timestamp} Earnings table updated: {upserted} symbols")
+        return upserted
+    finally:
+        if own_conn:
+            conn.close()

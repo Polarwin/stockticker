@@ -222,6 +222,38 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 12. Web UI
+
+**Asked:** Add a Flask web UI: earnings DB table + collector update, `web.py` serving a single-page app with watchlist management, symbol search, candlestick chart with SMAs, earnings calendar, and a per-symbol status endpoint; `web_host`/`web_port` settings; systemd service for the web UI; tests, then commit and push.
+
+**Done:**
+- Installed Flask 3.1.3 into the venv (`bin/pip install flask`).
+- `db.py`: new `earnings(symbol TEXT PRIMARY KEY, earnings_date TEXT, eps_estimate REAL, updated_at TEXT)` table created by `init_db()`; new `upsert_earnings()` helper.
+- `collector.py`: new `update_earnings(settings, test=False, conn=None)` reads `Ticker.calendar` `'Earnings Date'`[0] / `'Earnings Average'` per watchlist symbol (reusing `earnings_reminder.get_earnings_info`), upserts into the earnings table, warns and skips per-symbol errors. `update_database()` calls it after prices; new `--update-earnings` flag in `main.py` runs it alone.
+- `settings.json` (+ defaults): `web_host` ("127.0.0.1"), `web_port` (8000).
+- Created `web.py` (Flask):
+  - `GET /` serves `static/index.html`; `GET /api/config` exposes `earnings_remind_days` for the badge threshold.
+  - `GET /api/watchlist`; `POST /api/watchlist` validates `^[A-Z.]{1,6}$` (uppercased), appends if absent, then immediately fetches 1y history into `daily_prices` and earnings into `earnings`; `DELETE /api/watchlist/X` removes the line (DB rows kept).
+  - `GET /api/search?q=` uses `yf.Search` (verified working), falling back to substring match over bundled `static/symbols.json` (503 S&P 500 constituents, generated from the datasets/s-and-p-500-companies CSV).
+  - `GET /api/prices/X` returns the last 260 trading days from `daily_prices` with `dates[]`, `ohlc[]`, and `sma5/20/50/200[]` computed in Python (None until enough data).
+  - `GET /api/earnings?range=week|next-week|month` reads the earnings table only (week = today..Sunday, next-week = next Mon..Sun, month = rest of calendar month), sorted by date.
+  - `GET /api/status/X` returns `{next_earnings, days_until, eps_estimate}` or null (past dates count as null).
+- Created `static/index.html`: single page, plain JS + fetch, lightweight-charts v4 from unpkg. Left panel: watchlist with autocomplete add-input (debounced `/api/search`, add on click/Enter) and per-row delete. Right panel: candlestick chart with toggleable MA5/20/50/200 line series and an earnings badge (`📅 Earnings in N days — EPS est X`) shown when `days_until <= earnings_remind_days`. Bottom: earnings calendar with This week / Next week / This month tabs. Panels stack under 768px.
+- `install_service.sh` now also installs `stockticker-web.service` (same User/WorkingDirectory, `ExecStart=<project>/bin/python <project>/web.py`, `Restart=always`); `uninstall_service.sh` removes both services. `bash -n` passes on both.
+- Tested:
+  - `bin/python main.py --update-earnings --test` → `Earnings table updated: 39 symbols`.
+  - `GET /api/watchlist` → 42 symbols; `GET /api/search?q=app` → APP/AAPL/AMAT/AAOI/APLD.
+  - `GET /api/prices/IBM` → 260 days, all four SMA arrays present with correct None prefixes.
+  - `GET /api/earnings?range=month` → 12 rows including IBM 2026-07-22; `GET /api/status/IBM` → `{days_until: 1, eps_estimate: 2.9331, next_earnings: "2026-07-22"}`.
+  - POST KO → appended, 251 price rows + earnings fetched immediately; invalid symbol → 400; DELETE KO → removed from file, 251 DB rows kept.
+
+**Key decisions:**
+- Added `GET /api/config` (not in the spec) so the frontend knows `earnings_remind_days` for the badge without hardcoding it; `/api/status` also carries `eps_estimate` so the badge can show `EPS est X`.
+- `yf.Search` is the primary search path; the bundled `symbols.json` is the offline/rate-limit fallback (symbol-prefix matches rank before substring matches).
+- Web endpoints read the watchlist file directly instead of `ticker.load_watchlist()` to avoid `SystemExit` on an empty file (possible after deleting the last symbol via the UI).
+
+---
+
 ## Final Project State
 
 **Tracked files:**
@@ -235,19 +267,23 @@ This log records the work done in this CLI session, in chronological order.
 - `notify.py`
 - `SESSION_LOG.md` (this file)
 - `settings.json`
+- `static/index.html`
+- `static/symbols.json`
 - `ticker.py`
 - `uninstall_service.sh`
 - `watchlist.txt`
+- `web.py`
 
 (`stockticker.db` is created at runtime and gitignored.)
 
 **Runtime behavior:**
 - `python main.py --once` runs one ticker round and one earnings check immediately (ignoring the schedule), prints timestamped output, and sends Telegram messages if credentials are configured.
-- Running without `--once` loops every `ticker_interval_seconds` (600). Ticker rounds only run when `ticker_enabled` is true, and are skipped outside market hours (Mon-Fri 09:30-16:00 America/New_York); the earnings reminder runs once per day at/after 08:00 market time regardless; the price database updates once per day at/after 18:00 market time when `db_enabled` is true.
-- `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current).
+- Running without `--once` loops every `ticker_interval_seconds` (600). Ticker rounds only run when `ticker_enabled` is true, and are skipped outside market hours (Mon-Fri 09:30-16:00 America/New_York); the earnings reminder runs once per day at/after 08:00 market time regardless; the price database updates once per day at/after 18:00 market time when `db_enabled` is true (prices + earnings table).
+- `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current); `--update-earnings` refreshes only the earnings table.
 - `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
-- All schedule/market/earnings/db settings live in `settings.json`; missing file falls back to built-in defaults with a warning.
-- `bash install_service.sh` (requires sudo) installs the watcher as a systemd service.
-- `bash uninstall_service.sh` (requires sudo) removes it.
+- `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8000): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar.
+- All schedule/market/earnings/db/web settings live in `settings.json`; missing file falls back to built-in defaults with a warning.
+- `bash install_service.sh` (requires sudo) installs the watcher and the web UI as systemd services.
+- `bash uninstall_service.sh` (requires sudo) removes both.
 
 **Repo URL:** https://github.com/Polarwin/stockticker

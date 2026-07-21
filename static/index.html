@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stockticker</title>
+<script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #131722;
+    --panel: #1e222d;
+    --border: #2a2e39;
+    --text: #d1d4dc;
+    --muted: #787b86;
+    --accent: #2962ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+  }
+  .layout {
+    display: flex;
+    gap: 12px;
+    padding: 12px 16px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  #watchlist-panel { width: 280px; flex-shrink: 0; }
+  #chart-panel { flex-grow: 1; min-width: 0; }
+  #add-row { display: flex; gap: 6px; position: relative; }
+  #add-input {
+    flex-grow: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    padding: 6px 8px;
+    text-transform: uppercase;
+  }
+  #add-btn {
+    background: var(--accent);
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  #autocomplete {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    z-index: 10;
+    display: none;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+  #autocomplete div {
+    padding: 6px 8px;
+    cursor: pointer;
+  }
+  #autocomplete div:hover { background: var(--panel); }
+  #autocomplete .sym { font-weight: 600; }
+  #autocomplete .name { color: var(--muted); font-size: 12px; margin-left: 6px; }
+  #watchlist { list-style: none; margin: 12px 0 0; padding: 0; }
+  #watchlist li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  #watchlist li:hover { background: var(--bg); }
+  #watchlist li.selected { background: var(--accent); color: #fff; }
+  .del-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 4px;
+  }
+  .del-btn:hover { color: #f23645; }
+  #chart-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  #chart-symbol { font-size: 18px; font-weight: 600; }
+  #earnings-badge {
+    background: #4a3800;
+    color: #ffcc4d;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 13px;
+    display: none;
+  }
+  .ma-toggles label {
+    font-size: 12px;
+    color: var(--muted);
+    margin-right: 8px;
+    cursor: pointer;
+  }
+  #chart { width: 100%; height: 420px; }
+  #calendar-panel { margin: 0 16px 16px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tab {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--muted);
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #earnings-list table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  #earnings-list td, #earnings-list th {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  #earnings-list th { color: var(--muted); font-weight: 500; }
+  .empty { color: var(--muted); padding: 8px; }
+  @media (max-width: 768px) {
+    .layout { flex-direction: column; }
+    #watchlist-panel { width: 100%; }
+    #chart { height: 320px; }
+  }
+</style>
+</head>
+<body>
+<header>📈 Stockticker</header>
+
+<div class="layout">
+  <div class="panel" id="watchlist-panel">
+    <div id="add-row">
+      <input id="add-input" placeholder="Add symbol…" autocomplete="off">
+      <button id="add-btn">Add</button>
+      <div id="autocomplete"></div>
+    </div>
+    <ul id="watchlist"></ul>
+  </div>
+
+  <div class="panel" id="chart-panel">
+    <div id="chart-header">
+      <span id="chart-symbol">Select a symbol</span>
+      <span id="earnings-badge"></span>
+      <span class="ma-toggles">
+        <label><input type="checkbox" data-ma="sma5" checked> MA5</label>
+        <label><input type="checkbox" data-ma="sma20" checked> MA20</label>
+        <label><input type="checkbox" data-ma="sma50"> MA50</label>
+        <label><input type="checkbox" data-ma="sma200"> MA200</label>
+      </span>
+    </div>
+    <div id="chart"></div>
+  </div>
+</div>
+
+<div class="panel" id="calendar-panel">
+  <div class="tabs">
+    <button class="tab active" data-range="week">This week</button>
+    <button class="tab" data-range="next-week">Next week</button>
+    <button class="tab" data-range="month">This month</button>
+  </div>
+  <div id="earnings-list"></div>
+</div>
+
+<script>
+const MA_COLORS = { sma5: '#2962ff', sma20: '#ff9800', sma50: '#9c27b0', sma200: '#f23645' };
+
+let remindDays = 7;
+let currentSymbol = null;
+let chart = null;
+let candleSeries = null;
+let maSeries = {};
+let priceData = null;
+
+async function api(path, options) {
+  const resp = await fetch(path, options);
+  return resp.json();
+}
+
+async function loadConfig() {
+  const cfg = await api('/api/config');
+  remindDays = cfg.earnings_remind_days;
+}
+
+async function loadWatchlist() {
+  const symbols = await api('/api/watchlist');
+  const ul = document.getElementById('watchlist');
+  ul.innerHTML = '';
+  for (const sym of symbols) {
+    const li = document.createElement('li');
+    li.dataset.symbol = sym;
+    if (sym === currentSymbol) li.classList.add('selected');
+
+    const label = document.createElement('span');
+    label.textContent = sym;
+    label.addEventListener('click', () => selectSymbol(sym));
+
+    const del = document.createElement('button');
+    del.className = 'del-btn';
+    del.textContent = '✕';
+    del.title = 'Remove ' + sym;
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await api('/api/watchlist/' + encodeURIComponent(sym), { method: 'DELETE' });
+      if (currentSymbol === sym) { currentSymbol = null; clearChart(); }
+      loadWatchlist();
+      loadEarnings(currentRange());
+    });
+
+    li.appendChild(label);
+    li.appendChild(del);
+    ul.appendChild(li);
+  }
+}
+
+function clearChart() {
+  document.getElementById('chart-symbol').textContent = 'Select a symbol';
+  document.getElementById('earnings-badge').style.display = 'none';
+  if (chart) { chart.remove(); chart = null; candleSeries = null; maSeries = {}; }
+}
+
+function buildChart() {
+  if (chart) chart.remove();
+  chart = LightweightCharts.createChart(document.getElementById('chart'), {
+    layout: {
+      background: { color: '#1e222d' },
+      textColor: '#d1d4dc',
+    },
+    grid: {
+      vertLines: { color: '#2a2e39' },
+      horzLines: { color: '#2a2e39' },
+    },
+    timeScale: { borderColor: '#2a2e39' },
+    rightPriceScale: { borderColor: '#2a2e39' },
+    autoSize: true,
+  });
+  candleSeries = chart.addCandlestickSeries({
+    upColor: '#089981', downColor: '#f23645',
+    wickUpColor: '#089981', wickDownColor: '#f23645',
+    borderVisible: false,
+  });
+  maSeries = {};
+  for (const [key, color] of Object.entries(MA_COLORS)) {
+    maSeries[key] = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false });
+  }
+}
+
+function renderSeries() {
+  if (!priceData || !candleSeries) return;
+  candleSeries.setData(priceData.ohlc.filter(p => p.open != null && p.close != null));
+  document.querySelectorAll('.ma-toggles input').forEach(cb => {
+    const key = cb.dataset.ma;
+    const series = maSeries[key];
+    if (!series) return;
+    if (!cb.checked) { series.setData([]); return; }
+    const pts = [];
+    priceData.dates.forEach((d, i) => {
+      const v = priceData[key][i];
+      if (v != null) pts.push({ time: d, value: v });
+    });
+    series.setData(pts);
+  });
+  chart.timeScale().fitContent();
+}
+
+async function selectSymbol(sym) {
+  currentSymbol = sym;
+  document.querySelectorAll('#watchlist li').forEach(li =>
+    li.classList.toggle('selected', li.dataset.symbol === sym));
+  document.getElementById('chart-symbol').textContent = sym;
+
+  const [prices, status] = await Promise.all([
+    api('/api/prices/' + encodeURIComponent(sym)),
+    api('/api/status/' + encodeURIComponent(sym)),
+  ]);
+
+  const badge = document.getElementById('earnings-badge');
+  if (status && status.days_until <= remindDays) {
+    const eps = status.eps_estimate == null ? 'N/A' : status.eps_estimate;
+    badge.textContent = '📅 Earnings in ' + status.days_until +
+      (status.days_until === 1 ? ' day' : ' days') + ' — EPS est ' + eps;
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+
+  priceData = prices;
+  if (!chart) buildChart();
+  renderSeries();
+}
+
+// --- Add symbol with autocomplete ---
+const addInput = document.getElementById('add-input');
+const acBox = document.getElementById('autocomplete');
+let acTimer = null;
+
+addInput.addEventListener('input', () => {
+  clearTimeout(acTimer);
+  const q = addInput.value.trim();
+  if (!q) { acBox.style.display = 'none'; return; }
+  acTimer = setTimeout(async () => {
+    const matches = await api('/api/search?q=' + encodeURIComponent(q));
+    acBox.innerHTML = '';
+    if (!matches.length) { acBox.style.display = 'none'; return; }
+    for (const m of matches) {
+      const div = document.createElement('div');
+      div.innerHTML = '<span class="sym"></span><span class="name"></span>';
+      div.querySelector('.sym').textContent = m.symbol;
+      div.querySelector('.name').textContent = m.name;
+      div.addEventListener('click', () => addSymbol(m.symbol));
+      acBox.appendChild(div);
+    }
+    acBox.style.display = '';
+  }, 250);
+});
+
+addInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') addSymbol(addInput.value.trim().toUpperCase());
+  if (e.key === 'Escape') acBox.style.display = 'none';
+});
+
+document.addEventListener('click', (e) => {
+  if (!acBox.contains(e.target) && e.target !== addInput) acBox.style.display = 'none';
+});
+
+async function addSymbol(sym) {
+  acBox.style.display = 'none';
+  addInput.value = '';
+  if (!sym) return;
+  const result = await api('/api/watchlist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol: sym }),
+  });
+  if (result.error) { alert(result.error); return; }
+  await loadWatchlist();
+  selectSymbol(sym);
+  loadEarnings(currentRange());
+}
+
+// --- MA toggles ---
+document.querySelectorAll('.ma-toggles input').forEach(cb =>
+  cb.addEventListener('change', renderSeries));
+
+// --- Earnings calendar tabs ---
+function currentRange() {
+  return document.querySelector('.tab.active').dataset.range;
+}
+
+async function loadEarnings(range) {
+  const rows = await api('/api/earnings?range=' + range);
+  const box = document.getElementById('earnings-list');
+  if (!rows.length) {
+    box.innerHTML = '<div class="empty">No earnings in this range.</div>';
+    return;
+  }
+  const table = document.createElement('table');
+  table.innerHTML = '<tr><th>Date</th><th>Symbol</th><th>EPS est</th></tr>';
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    const eps = r.eps_estimate == null ? 'N/A' : r.eps_estimate;
+    tr.innerHTML = '<td></td><td></td><td></td>';
+    tr.children[0].textContent = r.earnings_date;
+    tr.children[1].textContent = r.symbol;
+    tr.children[2].textContent = eps;
+    table.appendChild(tr);
+  }
+  box.innerHTML = '';
+  box.appendChild(table);
+}
+
+document.querySelectorAll('.tab').forEach(tab =>
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    loadEarnings(tab.dataset.range);
+  }));
+
+// --- Init ---
+(async () => {
+  await loadConfig();
+  await loadWatchlist();
+  loadEarnings('week');
+  const first = document.querySelector('#watchlist li');
+  if (first) selectSymbol(first.dataset.symbol);
+})();
+</script>
+</body>
+</html>

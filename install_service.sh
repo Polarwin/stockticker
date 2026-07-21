@@ -28,25 +28,50 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=multi-user.target
 EOF
 
+WEB_SERVICE_NAME="stockticker-web"
+WEB_SERVICE_FILE="/etc/systemd/system/${WEB_SERVICE_NAME}.service"
+
+cat <<EOF | sudo tee "${WEB_SERVICE_FILE}" >/dev/null
+[Unit]
+Description=Stockticker web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${USER_NAME}
+WorkingDirectory=${PROJECT_DIR}
+ExecStart=${PROJECT_DIR}/bin/python ${PROJECT_DIR}/web.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 sudo systemctl daemon-reload
 
 # Idempotent start/restart: enable & start if not running, otherwise restart
 # so the updated unit file takes effect.
-if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
-    echo "Service is already running; restarting with updated unit..."
-    sudo systemctl restart "${SERVICE_NAME}"
-else
-    sudo systemctl enable --now "${SERVICE_NAME}"
-fi
+for UNIT in "${SERVICE_NAME}" "${WEB_SERVICE_NAME}"; do
+    if systemctl is-active --quiet "${UNIT}" 2>/dev/null; then
+        echo "${UNIT} is already running; restarting with updated unit..."
+        sudo systemctl restart "${UNIT}"
+    else
+        sudo systemctl enable --now "${UNIT}"
+    fi
+done
 
 echo ""
 echo "Service status:"
-sudo systemctl status --no-pager "${SERVICE_NAME}"
+sudo systemctl status --no-pager "${SERVICE_NAME}" "${WEB_SERVICE_NAME}"
 
 echo ""
 echo "Cheat sheet:"
-echo "  Restart:  sudo systemctl restart ${SERVICE_NAME}"
-echo "  Stop:     sudo systemctl stop ${SERVICE_NAME}"
+echo "  Restart:  sudo systemctl restart ${SERVICE_NAME} ${WEB_SERVICE_NAME}"
+echo "  Stop:     sudo systemctl stop ${SERVICE_NAME} ${WEB_SERVICE_NAME}"
 echo "  Logs:     sudo journalctl -u ${SERVICE_NAME} -f"
-echo "  Status:   sudo systemctl status ${SERVICE_NAME}"
-echo "  Disable:  sudo systemctl disable --now ${SERVICE_NAME}"
+echo "  Web logs: sudo journalctl -u ${WEB_SERVICE_NAME} -f"
+echo "  Status:   sudo systemctl status ${SERVICE_NAME} ${WEB_SERVICE_NAME}"
+echo "  Disable:  sudo systemctl disable --now ${SERVICE_NAME} ${WEB_SERVICE_NAME}"

@@ -9,7 +9,7 @@ from datetime import time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from collector import db_update_due, update_database
+from collector import db_update_due, update_database, update_earnings
 from earnings_reminder import format_match, run_earnings_check
 from notify import send_telegram
 from ticker import run_ticker_round
@@ -29,6 +29,8 @@ DEFAULT_SETTINGS = {
     "db_path": "stockticker.db",
     "db_update_time": "18:00",
     "db_backfill_days": 365,
+    "web_host": "127.0.0.1",
+    "web_port": 8000,
 }
 
 
@@ -104,6 +106,11 @@ def main() -> None:
         action="store_true",
         help="Update the local price database immediately, then exit.",
     )
+    parser.add_argument(
+        "--update-earnings",
+        action="store_true",
+        help="Update the earnings table immediately, then exit.",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
@@ -114,6 +121,10 @@ def main() -> None:
 
     if args.update_db:
         update_database(settings, test=args.test)
+        return
+
+    if args.update_earnings:
+        update_earnings(settings, test=args.test)
         return
 
     if args.once:

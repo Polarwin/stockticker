@@ -39,6 +39,16 @@ def init_db(path: Path | str) -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS earnings (
+            symbol        TEXT PRIMARY KEY,
+            earnings_date TEXT,
+            eps_estimate  REAL,
+            updated_at    TEXT
+        )
+        """
+    )
     conn.commit()
     return conn
 
@@ -57,6 +67,24 @@ def upsert_prices(conn: sqlite3.Connection, symbol: str, rows: list[tuple]) -> i
         [(symbol, *row) for row in rows],
     )
     return len(rows)
+
+
+def upsert_earnings(
+    conn: sqlite3.Connection,
+    symbol: str,
+    earnings_date: str,
+    eps_estimate: float | None,
+    updated_at: str,
+) -> None:
+    """Insert or replace the earnings row for a symbol."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO earnings
+            (symbol, earnings_date, eps_estimate, updated_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (symbol, earnings_date, eps_estimate, updated_at),
+    )
 
 
 def get_meta(conn: sqlite3.Connection, key: str) -> str | None:

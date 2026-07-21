@@ -1,0 +1,286 @@
+"""Flask web UI for the stock ticker: watchlist, charts, earnings calendar."""
+
+import json
+import re
+from calendar import monthrange
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import yfinance as yf
+from flask import Flask, jsonify, request, send_from_directory
+
+from collector import fetch_history_rows
+from db import init_db, resolve_db_path, upsert_earnings, upsert_prices
+from earnings_reminder import get_earnings_info
+from main import load_settings
+from ticker import WATCHLIST_PATH
+
+SETTINGS = load_settings()
+MARKET_TZ = ZoneInfo(SETTINGS["market_timezone"])
+
+STATIC_DIR = Path(__file__).with_name("static")
+SYMBOLS_PATH = STATIC_DIR / "symbols.json"
+SYMBOL_RE = re.compile(r"^[A-Z.]{1,6}$")
+
+app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
+
+
+def today():
+    """Today's date in the market timezone."""
+    return datetime.now(MARKET_TZ).date()
+
+
+def open_db():
+    return init_db(resolve_db_path(SETTINGS["db_path"]))
+
+
+def read_watchlist() -> list[str]:
+    """Read tickers from the watchlist file (no exits, unlike ticker.load_watchlist)."""
+    if not WATCHLIST_PATH.exists():
+        return []
+    tickers = []
+    for line in WATCHLIST_PATH.read_text().splitlines():
+        ticker = line.strip().upper()
+        if ticker and not ticker.startswith("#"):
+            tickers.append(ticker)
+    return tickers
+
+
+@app.get("/")
+def index():
+    return send_from_directory(STATIC_DIR, "index.html")
+
+
+@app.get("/api/config")
+def api_config():
+    return jsonify({"earnings_remind_days": SETTINGS["earnings_remind_days"]})
+
+
+@app.get("/api/watchlist")
+def api_watchlist():
+    return jsonify(read_watchlist())
+
+
+@app.post("/api/watchlist")
+def api_watchlist_add():
+    data = request.get_json(force=True, silent=True) or {}
+    symbol = str(data.get("symbol", "")).strip().upper()
+    if not SYMBOL_RE.match(symbol):
+        return jsonify({"error": "invalid symbol"}), 400
+
+    tickers = read_watchlist()
+    added = False
+    if symbol not in tickers:
+        with WATCHLIST_PATH.open("a") as f:
+            f.write(f"{symbol}\n")
+        added = True
+
+    # Fetch history and earnings immediately so the UI works instantly.
+    conn = open_db()
+    try:
+        try:
+            rows = fetch_history_rows(symbol, "1y")
+            upsert_prices(conn, symbol, rows)
+        except ValueError as exc:
+            print(f"Warning: {exc}")
+        try:
+            info = get_earnings_info(symbol)
+            if info is not None:
+                _s, earnings_date, eps = info
+                upsert_earnings(
+                    conn,
+                    symbol,
+                    earnings_date.isoformat(),
+                    eps,
+                    datetime.now(MARKET_TZ).isoformat(),
+                )
+        except ValueError as exc:
+            print(f"Warning: {exc}")
+        conn.commit()
+    finally:
+        conn.close()
+
+    return jsonify({"ok": True, "symbol": symbol, "added": added})
+
+
+@app.delete("/api/watchlist/<symbol>")
+def api_watchlist_delete(symbol: str):
+    symbol = symbol.strip().upper()
+    tickers = read_watchlist()
+    if symbol not in tickers:
+        return jsonify({"error": "not in watchlist"}), 404
+
+    lines = WATCHLIST_PATH.read_text().splitlines()
+    kept = [line for line in lines if line.strip().upper() != symbol]
+    WATCHLIST_PATH.write_text("\n".join(kept) + "\n")
+    # DB rows are kept deliberately.
+    return jsonify({"ok": True, "symbol": symbol})
+
+
+def search_static(query: str) -> list[dict]:
+    """Substring match against the bundled static/symbols.json fallback."""
+    if not SYMBOLS_PATH.exists():
+        return []
+    entries = json.loads(SYMBOLS_PATH.read_text())
+    q = query.lower()
+    prefix, substring = [], []
+    for entry in entries:
+        symbol, name = entry["symbol"], entry["name"]
+        if symbol.lower().startswith(q):
+            prefix.append(entry)
+        elif q in symbol.lower() or q in name.lower():
+            substring.append(entry)
+        if len(prefix) >= 10:
+            break
+    return (prefix + substring)[:10]
+
+
+@app.get("/api/search")
+def api_search():
+    query = (request.args.get("q") or "").strip()
+    if not query:
+        return jsonify([])
+
+    try:
+        results = yf.Search(query, max_results=10).quotes
+        matches = []
+        for quote in results:
+            symbol = (quote.get("symbol") or "").upper()
+            name = quote.get("shortname") or quote.get("longname") or ""
+            if symbol:
+                matches.append({"symbol": symbol, "name": name})
+            if len(matches) >= 10:
+                break
+        if matches:
+            return jsonify(matches)
+    except Exception as exc:
+        print(f"Warning: yfinance search failed ({exc}); using static fallback")
+
+    return jsonify(search_static(query))
+
+
+def sma(values: list[float | None], window: int) -> list[float | None]:
+    """Simple moving average aligned with values; None until enough data."""
+    out: list[float | None] = []
+    for i in range(len(values)):
+        if i + 1 < window:
+            out.append(None)
+            continue
+        chunk = values[i + 1 - window : i + 1]
+        if any(v is None for v in chunk):
+            out.append(None)
+        else:
+            out.append(round(sum(chunk) / window, 4))
+    return out
+
+
+@app.get("/api/prices/<symbol>")
+def api_prices(symbol: str):
+    symbol = symbol.strip().upper()
+    conn = open_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT date, open, high, low, close FROM daily_prices
+            WHERE symbol = ? ORDER BY date DESC LIMIT 260
+            """,
+            (symbol,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    rows.reverse()
+    dates = [r[0] for r in rows]
+    closes = [r[4] for r in rows]
+    return jsonify(
+        {
+            "symbol": symbol,
+            "dates": dates,
+            "ohlc": [
+                {"time": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4]}
+                for r in rows
+            ],
+            "sma5": sma(closes, 5),
+            "sma20": sma(closes, 20),
+            "sma50": sma(closes, 50),
+            "sma200": sma(closes, 200),
+        }
+    )
+
+
+EARNINGS_RANGES = {"week", "next-week", "month"}
+
+
+@app.get("/api/earnings")
+def api_earnings():
+    range_name = request.args.get("range") or "week"
+    if range_name not in EARNINGS_RANGES:
+        return jsonify({"error": "range must be week, next-week, or month"}), 400
+
+    now = today()
+    if range_name == "week":
+        start, end = now, now + timedelta(days=6 - now.weekday())
+    elif range_name == "next-week":
+        start = now + timedelta(days=7 - now.weekday())
+        end = start + timedelta(days=6)
+    else:  # month: rest of the current calendar month
+        start = now
+        end = now.replace(day=monthrange(now.year, now.month)[1])
+
+    conn = open_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol, earnings_date, eps_estimate FROM earnings
+            WHERE earnings_date BETWEEN ? AND ?
+            ORDER BY earnings_date, symbol
+            """,
+            (start.isoformat(), end.isoformat()),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return jsonify(
+        [
+            {"symbol": s, "earnings_date": d, "eps_estimate": e}
+            for s, d, e in rows
+        ]
+    )
+
+
+@app.get("/api/status/<symbol>")
+def api_status(symbol: str):
+    symbol = symbol.strip().upper()
+    conn = open_db()
+    try:
+        row = conn.execute(
+            "SELECT earnings_date, eps_estimate FROM earnings WHERE symbol = ?",
+            (symbol,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not row or not row[0]:
+        return jsonify(None)
+
+    earnings_date = datetime.strptime(row[0], "%Y-%m-%d").date()
+    days_until = (earnings_date - today()).days
+    if days_until < 0:
+        return jsonify(None)
+
+    return jsonify(
+        {
+            "next_earnings": row[0],
+            "days_until": days_until,
+            "eps_estimate": row[1],
+        }
+    )
+
+
+def main() -> None:
+    app.run(host=SETTINGS["web_host"], port=int(SETTINGS["web_port"]))
+
+
+if __name__ == "__main__":
+    main()
