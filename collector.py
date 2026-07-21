@@ -9,6 +9,7 @@ import yfinance as yf
 
 from db import get_meta, init_db, resolve_db_path, set_meta, upsert_earnings, upsert_prices
 from earnings_reminder import get_earnings_info
+from indicators import detect_crossovers
 from ticker import load_watchlist
 
 LAST_UPDATE_KEY = "last_update_date"
@@ -153,3 +154,38 @@ def update_earnings(settings: dict, test: bool = False, conn=None) -> int:
     finally:
         if own_conn:
             conn.close()
+
+
+def check_signals(settings: dict, test: bool = False) -> list[tuple[str, str, str, str]]:
+    """Check all watchlist symbols for MACD/RSI crossovers on the latest bar.
+
+    Prints one timestamped console line per signal. Returns a list of
+    (symbol, indicator, direction, date) tuples; empty means no alert.
+    """
+    market_tz = ZoneInfo(settings["market_timezone"])
+    timestamp = datetime.now(market_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+    signals: list[tuple[str, str, str, str]] = []
+    conn = init_db(resolve_db_path(settings["db_path"]))
+    try:
+        for symbol in load_watchlist():
+            rows = conn.execute(
+                """
+                SELECT date, close FROM daily_prices
+                WHERE symbol = ? AND close IS NOT NULL ORDER BY date
+                """,
+                (symbol,),
+            ).fetchall()
+            if len(rows) < 2:
+                continue
+            closes = [r[1] for r in rows]
+            for indicator, direction in detect_crossovers(closes):
+                signals.append((symbol, indicator, direction, rows[-1][0]))
+    finally:
+        conn.close()
+
+    for symbol, indicator, direction, date in signals:
+        print(f"{timestamp} {symbol}: {indicator} {direction} crossover ({date})")
+    if not signals:
+        print(f"{timestamp} No MACD/RSI crossovers detected")
+    return signals

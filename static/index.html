@@ -154,6 +154,10 @@
   .range-btns button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
   #chart-wrap { position: relative; }
   #chart { width: 100%; height: 440px; }
+  .indicator-toggles { margin-top: 6px; font-size: 12px; color: var(--muted); }
+  .indicator-toggles label { margin-right: 12px; cursor: pointer; }
+  .indicator-pane { height: 120px; margin-top: 6px; }
+  .indicator-pane > div { width: 100%; height: 100%; }
   #chart-loading {
     position: absolute;
     inset: 0;
@@ -260,6 +264,12 @@
       <div id="chart"></div>
       <div id="chart-loading">Loading…</div>
     </div>
+    <div class="indicator-toggles">
+      <label><input type="checkbox" id="toggle-macd" checked> MACD (12,26,9)</label>
+      <label><input type="checkbox" id="toggle-rsi" checked> RSI (14)</label>
+    </div>
+    <div id="macd-wrap" class="indicator-pane"><div id="macd-chart"></div></div>
+    <div id="rsi-wrap" class="indicator-pane"><div id="rsi-chart"></div></div>
   </div>
 </div>
 
@@ -277,6 +287,9 @@ let lastPriceLine = null;
 let currentEarningsDate = null;
 let maSeries = {};
 let priceData = null;
+let macdChart = null, rsiChart = null;
+let macdLineSeries = null, macdSignalSeries = null, macdHistSeries = null, rsiSeries = null;
+let syncingScales = false;
 
 // --- helpers ---
 async function api(path, options) {
@@ -388,19 +401,39 @@ function clearChart() {
   document.getElementById('chart-symbol').textContent = 'Select a symbol';
   document.getElementById('ohlc-legend').textContent = '';
   document.getElementById('earnings-badge').style.display = 'none';
-  if (chart) { chart.remove(); chart = null; candleSeries = null; volumeSeries = null; lastPriceLine = null; maSeries = {}; }
+  if (chart) chart.remove();
+  if (macdChart) macdChart.remove();
+  if (rsiChart) rsiChart.remove();
+  chart = macdChart = rsiChart = null;
+  candleSeries = volumeSeries = lastPriceLine = null;
+  macdLineSeries = macdSignalSeries = macdHistSeries = rsiSeries = null;
+  maSeries = {};
+}
+
+const CHART_OPTIONS = {
+  layout: { background: { color: '#1e222d' }, textColor: '#d1d4dc' },
+  grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
+  timeScale: { borderColor: '#2a2e39' },
+  rightPriceScale: { borderColor: '#2a2e39' },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  autoSize: true,
+};
+
+function syncTimeScales(source, targets) {
+  source.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    if (syncingScales || !range) return;
+    syncingScales = true;
+    targets.forEach(t => { if (t) t.timeScale().setVisibleLogicalRange(range); });
+    syncingScales = false;
+  });
 }
 
 function buildChart() {
   if (chart) chart.remove();
-  chart = LightweightCharts.createChart(document.getElementById('chart'), {
-    layout: { background: { color: '#1e222d' }, textColor: '#d1d4dc' },
-    grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
-    timeScale: { borderColor: '#2a2e39' },
-    rightPriceScale: { borderColor: '#2a2e39' },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    autoSize: true,
-  });
+  if (macdChart) macdChart.remove();
+  if (rsiChart) rsiChart.remove();
+
+  chart = LightweightCharts.createChart(document.getElementById('chart'), CHART_OPTIONS);
   candleSeries = chart.addCandlestickSeries({
     upColor: '#089981', downColor: '#f23645',
     wickUpColor: '#089981', wickDownColor: '#f23645',
@@ -417,6 +450,24 @@ function buildChart() {
   for (const [key, color] of Object.entries(MA_COLORS)) {
     maSeries[key] = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false });
   }
+
+  // MACD pane: histogram + macd line + signal line.
+  macdChart = LightweightCharts.createChart(document.getElementById('macd-chart'), CHART_OPTIONS);
+  macdHistSeries = macdChart.addHistogramSeries({ priceLineVisible: false });
+  macdLineSeries = macdChart.addLineSeries({ color: '#2962ff', lineWidth: 1, priceLineVisible: false });
+  macdSignalSeries = macdChart.addLineSeries({ color: '#ff9800', lineWidth: 1, priceLineVisible: false });
+
+  // RSI pane with 30/70 guides.
+  rsiChart = LightweightCharts.createChart(document.getElementById('rsi-chart'), CHART_OPTIONS);
+  rsiSeries = rsiChart.addLineSeries({ color: '#9c27b0', lineWidth: 1, priceLineVisible: false });
+  rsiSeries.createPriceLine({ price: 70, color: '#787b86', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false, title: '' });
+  rsiSeries.createPriceLine({ price: 30, color: '#787b86', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false, title: '' });
+
+  // Keep all three charts on the same visible time window.
+  syncTimeScales(chart, [macdChart, rsiChart]);
+  syncTimeScales(macdChart, [chart, rsiChart]);
+  syncTimeScales(rsiChart, [chart, macdChart]);
+
   chart.subscribeCrosshairMove((param) => {
     const bar = param.seriesData && param.seriesData.get(candleSeries);
     if (!bar || !priceData) { updateLegend(null); return; }
@@ -504,6 +555,31 @@ function renderSeries() {
     });
     series.setData(pts);
   });
+
+  // MACD + RSI panes.
+  if (macdChart && priceData.macd) {
+    const hist = [], line = [], signal = [];
+    priceData.dates.forEach((d, i) => {
+      const h = priceData.macd_histogram[i];
+      const m = priceData.macd[i];
+      const s = priceData.macd_signal[i];
+      if (h != null) hist.push({ time: d, value: h, color: h >= 0 ? 'rgba(8,153,129,0.5)' : 'rgba(242,54,69,0.5)' });
+      if (m != null) line.push({ time: d, value: m });
+      if (s != null) signal.push({ time: d, value: s });
+    });
+    macdHistSeries.setData(hist);
+    macdLineSeries.setData(line);
+    macdSignalSeries.setData(signal);
+  }
+  if (rsiChart && priceData.rsi) {
+    const pts = [];
+    priceData.dates.forEach((d, i) => {
+      const v = priceData.rsi[i];
+      if (v != null) pts.push({ time: d, value: v });
+    });
+    rsiSeries.setData(pts);
+  }
+
   applyRange(currentVisibleRange());
   updateLegend(null);
 }
@@ -515,10 +591,18 @@ function currentVisibleRange() {
 function applyRange(days) {
   if (!chart || !priceData || !priceData.dates.length) return;
   const n = priceData.dates.length;
-  if (!days || days >= n) {
-    chart.timeScale().fitContent();
-  } else {
-    chart.timeScale().setVisibleLogicalRange({ from: n - days, to: n - 1 });
+  syncingScales = true;
+  try {
+    for (const c of [chart, macdChart, rsiChart]) {
+      if (!c) continue;
+      if (!days || days >= n) {
+        c.timeScale().fitContent();
+      } else {
+        c.timeScale().setVisibleLogicalRange({ from: n - days, to: n - 1 });
+      }
+    }
+  } finally {
+    syncingScales = false;
   }
 }
 
@@ -574,6 +658,21 @@ document.querySelectorAll('.ma-toggles input').forEach(cb => {
   cb.addEventListener('change', () => {
     try { localStorage.setItem('ma_' + cb.dataset.ma, cb.checked ? '1' : '0'); } catch (e) {}
     renderSeries();
+  });
+});
+
+// --- indicator pane toggles (persisted) ---
+[['toggle-macd', 'macd-wrap'], ['toggle-rsi', 'rsi-wrap']].forEach(([toggleId, paneId]) => {
+  const cb = document.getElementById(toggleId);
+  const pane = document.getElementById(paneId);
+  try {
+    const saved = localStorage.getItem(toggleId);
+    if (saved !== null) cb.checked = saved === '1';
+  } catch (e) {}
+  pane.style.display = cb.checked ? '' : 'none';
+  cb.addEventListener('change', () => {
+    pane.style.display = cb.checked ? '' : 'none';
+    try { localStorage.setItem(toggleId, cb.checked ? '1' : '0'); } catch (e) {}
   });
 });
 

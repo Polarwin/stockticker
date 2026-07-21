@@ -441,6 +441,28 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 24. MACD/RSI Indicators and Crossover Alerts
+
+**Asked:** Add MACD and RSI indicators computed from the local DB, and send an alert on bullish/bearish crossovers.
+
+**Done:**
+- Created `indicators.py`: EMA (SMA-seeded), MACD (12/26/9: macd/signal/histogram), Wilder's RSI (14), and `detect_crossovers()` comparing the last two bars — MACD line vs signal line, RSI crossing up through 30 (bullish) or down through 70 (bearish). All series are None-padded through their warm-up periods.
+- `collector.py`: new `check_signals(settings, test=False)` loads closes from `daily_prices` per watchlist symbol, prints one timestamped console line per signal (or "No MACD/RSI crossovers detected"), and returns the signal list.
+- `main.py`: after the scheduled daily `update_database()` completes, `do_signal_check()` runs and sends one Telegram message `📊 Indicator Alerts` with lines like `AAPL: RSI bearish crossover (2026-07-20)` — only when there are signals; `--test` stays console-only. New `--signals` flag runs the check immediately and exits.
+- `web.py`: `/api/prices/X` now computes MACD/RSI over the full DB history (correct EMA warm-up) and returns the last 260 values as `macd[]`, `macd_signal[]`, `macd_histogram[]`, `rsi[]` aligned with `dates[]`.
+- `static/index.html`: two synced 120px sub-charts under the main chart — MACD (histogram colored by sign + macd/signal lines) and RSI (line with dashed 30/70 guides) — sharing the visible time window with the price chart in both directions (recursion-guarded), each with a persisted show/hide toggle; range buttons apply to all three charts.
+- Tested:
+  - Indicator sanity on 365 IBM closes: MACD warm-up at index 25, signal at 33, RSI at 14, all RSI within 0-100.
+  - `bin/python main.py --signals --test` → real signals on 2026-07-20: `AAPL: RSI bearish crossover`, `GOOG/AA/NFLX: MACD bearish crossover`.
+  - `/api/prices/IBM` returns all four new arrays (260 values, last MACD -12.468, RSI 31.63).
+  - Headless Chromium: both panes render canvases, toggle hides the MACD pane and persists in localStorage, no page errors.
+
+**Key decisions:**
+- Crossover detection compares only the last two bars and runs once daily after the DB update, so each crossover alerts exactly once.
+- Indicators are computed from up to 365 stored closes rather than the 260 shown, reducing EMA warm-up error at the left edge of the chart.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
@@ -449,6 +471,7 @@ This log records the work done in this CLI session, in chronological order.
 - `db.py`
 - `dedup_watchlist.py`
 - `earnings_reminder.py`
+- `indicators.py`
 - `install_service.sh`
 - `main.py`
 - `notify.py`
@@ -466,7 +489,7 @@ This log records the work done in this CLI session, in chronological order.
 **Runtime behavior:**
 - `python main.py --once` runs one ticker round and one earnings check immediately (ignoring the schedule), prints timestamped output, and sends Telegram messages if credentials are configured.
 - Running without `--once` loops every `ticker_interval_seconds` (600). Ticker rounds only run when `ticker_enabled` is true, and are skipped outside market hours (Mon-Fri 09:30-16:00 America/New_York); the earnings reminder runs once per day at/after 08:00 market time regardless; the price database updates once per day at/after 18:00 market time when `db_enabled` is true (prices + earnings table).
-- `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current); `--update-earnings` refreshes only the earnings table.
+- `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current); `--update-earnings` refreshes only the earnings table; `--signals` checks MACD/RSI crossovers and exits. After the scheduled daily DB update, crossover alerts are checked automatically and sent via Telegram when found.
 - `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
 - `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8010): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar.
 - All schedule/market/earnings/db/web settings live in `settings.json`; missing file falls back to built-in defaults with a warning.

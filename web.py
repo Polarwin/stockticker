@@ -13,6 +13,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from collector import fetch_history_rows
 from db import init_db, resolve_db_path, upsert_earnings, upsert_prices
 from earnings_reminder import get_earnings_info
+from indicators import macd, rsi
 from main import load_settings
 from ticker import WATCHLIST_PATH
 
@@ -260,17 +261,24 @@ def api_prices(symbol: str):
     symbol = symbol.strip().upper()
     conn = open_db()
     try:
+        # Full history so indicator EMAs/smoothing warm up correctly,
+        # then sliced to the last 260 trading days below.
         rows = conn.execute(
             """
             SELECT date, open, high, low, close, volume FROM daily_prices
-            WHERE symbol = ? ORDER BY date DESC LIMIT 260
+            WHERE symbol = ? ORDER BY date
             """,
             (symbol,),
         ).fetchall()
     finally:
         conn.close()
 
-    rows.reverse()
+    all_closes = [r[4] for r in rows]
+    macd_data = macd(all_closes)
+    rsi_data = rsi(all_closes)
+
+    rows = rows[-260:]
+    offset = len(all_closes) - len(rows)
     dates = [r[0] for r in rows]
     closes = [r[4] for r in rows]
     return jsonify(
@@ -286,6 +294,10 @@ def api_prices(symbol: str):
             "sma20": sma(closes, 20),
             "sma50": sma(closes, 50),
             "sma200": sma(closes, 200),
+            "macd": macd_data["macd"][offset:],
+            "macd_signal": macd_data["signal"][offset:],
+            "macd_histogram": macd_data["histogram"][offset:],
+            "rsi": rsi_data[offset:],
         }
     )
 

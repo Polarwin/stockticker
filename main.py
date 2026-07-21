@@ -9,7 +9,7 @@ from datetime import time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from collector import db_update_due, update_database, update_earnings
+from collector import check_signals, db_update_due, update_database, update_earnings
 from earnings_reminder import format_match, run_earnings_check
 from notify import send_telegram
 from ticker import run_ticker_round
@@ -81,6 +81,17 @@ def do_earnings_check(days: int, test: bool) -> None:
         send_telegram("📅 Earnings Reminder\n" + "\n".join(lines))
 
 
+def do_signal_check(settings: dict, test: bool) -> None:
+    """Check for MACD/RSI crossovers and send one Telegram alert on signals."""
+    signals = check_signals(settings, test=test)
+    if signals and not test:
+        lines = [
+            f"{symbol}: {indicator} {direction} crossover ({date})"
+            for symbol, indicator, direction, date in signals
+        ]
+        send_telegram("📊 Indicator Alerts\n" + "\n".join(lines))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Stock price watcher with earnings reminders."
@@ -111,6 +122,11 @@ def main() -> None:
         action="store_true",
         help="Update the earnings table immediately, then exit.",
     )
+    parser.add_argument(
+        "--signals",
+        action="store_true",
+        help="Check MACD/RSI crossovers immediately, then exit.",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
@@ -125,6 +141,10 @@ def main() -> None:
 
     if args.update_earnings:
         update_earnings(settings, test=args.test)
+        return
+
+    if args.signals:
+        do_signal_check(settings, args.test)
         return
 
     if args.once:
@@ -165,6 +185,7 @@ def main() -> None:
             and db_update_due(settings, now.date().isoformat())
         ):
             update_database(settings, test=args.test)
+            do_signal_check(settings, args.test)
 
         time.sleep(interval)
 
