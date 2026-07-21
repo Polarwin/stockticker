@@ -254,6 +254,23 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 13. Bind Web UI to the LAN
+
+**Asked:** Bind the web UI to the LAN (`web_host` → "0.0.0.0"), verify the port binding, restart the web process, check ufw, print LAN URLs, then commit and push.
+
+**Done:**
+- Changed `web_host` in `settings.json` from "127.0.0.1" to "0.0.0.0" (port stays 8000).
+- `ss -tlnp | grep 8000` showed a leftover `bin/python web.py` (pid 1171801, started manually, not via systemd) still bound to 127.0.0.1:8000.
+- No `stockticker-web.service` exists yet (install script was never run with sudo), so `web.py` was restarted directly: killed pid 1171801, relaunched with `nohup bin/python web.py`.
+- After restart: `ss -tlnp` shows `0.0.0.0:8000` listening; `curl http://127.0.0.1:8000/api/watchlist` and `curl http://192.168.0.9:8000/api/watchlist` both return 200.
+- `sudo -n ufw status` needs an interactive password and `ufw` is not installed anyway, so no firewall rule is needed.
+- LAN URLs for other devices: http://192.168.0.9:8000 (also reachable via Tailscale at http://100.103.88.9:8000).
+
+**Key decisions:**
+- Restarted the manually-started process in place rather than installing the systemd service, since installing requires sudo and the user runs that step themselves.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
