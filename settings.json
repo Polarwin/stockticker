@@ -6,5 +6,9 @@
   "market_open": "09:30",
   "market_close": "16:00",
   "earnings_remind_days": 7,
-  "earnings_check_time": "08:00"
+  "earnings_check_time": "08:00",
+  "db_enabled": true,
+  "db_path": "stockticker.db",
+  "db_update_time": "18:00",
+  "db_backfill_days": 365
 }

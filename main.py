@@ -9,6 +9,7 @@ from datetime import time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from collector import db_update_due, update_database
 from earnings_reminder import format_match, run_earnings_check
 from notify import send_telegram
 from ticker import run_ticker_round
@@ -24,6 +25,10 @@ DEFAULT_SETTINGS = {
     "market_close": "16:00",
     "earnings_remind_days": 7,
     "earnings_check_time": "08:00",
+    "db_enabled": True,
+    "db_path": "stockticker.db",
+    "db_update_time": "18:00",
+    "db_backfill_days": 365,
 }
 
 
@@ -94,6 +99,11 @@ def main() -> None:
         default=None,
         help="Override earnings_remind_days from settings.",
     )
+    parser.add_argument(
+        "--update-db",
+        action="store_true",
+        help="Update the local price database immediately, then exit.",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
@@ -102,6 +112,10 @@ def main() -> None:
         args.days if args.days is not None else settings["earnings_remind_days"]
     )
 
+    if args.update_db:
+        update_database(settings, test=args.test)
+        return
+
     if args.once:
         do_ticker_round(args.test)
         do_earnings_check(earnings_days, args.test)
@@ -109,6 +123,7 @@ def main() -> None:
 
     interval = settings["ticker_interval_seconds"]
     check_time = dt_time.fromisoformat(settings["earnings_check_time"])
+    db_update_time = dt_time.fromisoformat(settings["db_update_time"])
     last_earnings_check_date = None
 
     if not settings["ticker_enabled"]:
@@ -132,6 +147,13 @@ def main() -> None:
         if now.time() >= check_time and last_earnings_check_date != now.date():
             last_earnings_check_date = now.date()
             do_earnings_check(earnings_days, args.test)
+
+        if (
+            settings["db_enabled"]
+            and now.time() >= db_update_time
+            and db_update_due(settings, now.date().isoformat())
+        ):
+            update_database(settings, test=args.test)
 
         time.sleep(interval)
 

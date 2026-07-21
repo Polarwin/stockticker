@@ -196,10 +196,38 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 11. Local Price Database
+
+**Asked:** Add a local SQLite price database: new `db_*` settings keys, a `db.py` schema/helper module, a `collector.py` with `update_database()`, a daily scheduled update in the loop (independent of `ticker_enabled`), a `--update-db` flag, console-only logging, tests, then commit and push.
+
+**Done:**
+- Added to `settings.json` (and `DEFAULT_SETTINGS`): `db_enabled` (true), `db_path` ("stockticker.db"), `db_update_time` ("18:00", market timezone), `db_backfill_days` (365). Added `*.db` to `.gitignore`.
+- Created `db.py` (stdlib `sqlite3` only): `init_db(path)` creates `daily_prices(symbol, date, open, high, low, close, volume, PRIMARY KEY(symbol,date))` and `meta(key TEXT PRIMARY KEY, value TEXT)`; `upsert_prices(conn, symbol, rows)` uses `INSERT OR REPLACE`; `get_meta`/`set_meta` helpers; `resolve_db_path()` anchors relative paths at the project dir.
+- Created `collector.py` with `update_database(settings, test=False)`:
+  - First run (no `meta.last_update_date`): downloads `db_backfill_days` of daily OHLCV per symbol; later runs download only the last 5 days to cover downtime gaps.
+  - Upserts all rows; per-symbol errors warn and skip.
+  - On success sets `meta.last_update_date` to today (market timezone).
+  - Console-only logging: `YYYY-MM-DD HH:MM:SS DB updated: N symbols, M rows total`; logs `DB already up to date` and does nothing when already current. No Telegram message.
+  - `db_update_due(settings, today)` helper lets `main.py` gate the scheduled update on `meta.last_update_date < today`.
+- `main.py`: once per day at/after `db_update_time` (market timezone), if `db_enabled` and the DB is due, calls `update_database()` — independent of `ticker_enabled`. New `--update-db` flag runs the update immediately and exits; works with `--test`.
+- Tested:
+  - `bin/python main.py --update-db --test` → backfilled 42 symbols, 14855 rows.
+  - SQL check: every symbol has daily rows up to 2026-07-20 (365 rows for most; fewer for recent listings FIG/SPCX and ^VIX).
+  - Second `--update-db` run → `DB already up to date (last update 2026-07-21)`.
+
+**Key decisions:**
+- Incremental updates re-download the last 5 days (not just today) so weekend/downtime gaps self-heal via `INSERT OR REPLACE`.
+- `meta.last_update_date` is only written when at least one symbol succeeded, so a total outage doesn't mark the day done.
+- `--update-db` still respects the up-to-date check (logs and exits) rather than force-refetching.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
 - `.gitignore`
+- `collector.py`
+- `db.py`
 - `dedup_watchlist.py`
 - `earnings_reminder.py`
 - `install_service.sh`
@@ -211,11 +239,14 @@ This log records the work done in this CLI session, in chronological order.
 - `uninstall_service.sh`
 - `watchlist.txt`
 
+(`stockticker.db` is created at runtime and gitignored.)
+
 **Runtime behavior:**
 - `python main.py --once` runs one ticker round and one earnings check immediately (ignoring the schedule), prints timestamped output, and sends Telegram messages if credentials are configured.
-- Running without `--once` loops every `ticker_interval_seconds` (600). Ticker rounds only run when `ticker_enabled` is true, and are skipped outside market hours (Mon-Fri 09:30-16:00 America/New_York); the earnings reminder runs once per day at/after 08:00 market time regardless.
+- Running without `--once` loops every `ticker_interval_seconds` (600). Ticker rounds only run when `ticker_enabled` is true, and are skipped outside market hours (Mon-Fri 09:30-16:00 America/New_York); the earnings reminder runs once per day at/after 08:00 market time regardless; the price database updates once per day at/after 18:00 market time when `db_enabled` is true.
+- `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current).
 - `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
-- All schedule/market/earnings settings live in `settings.json`; missing file falls back to built-in defaults with a warning.
+- All schedule/market/earnings/db settings live in `settings.json`; missing file falls back to built-in defaults with a warning.
 - `bash install_service.sh` (requires sudo) installs the watcher as a systemd service.
 - `bash uninstall_service.sh` (requires sudo) removes it.
 
