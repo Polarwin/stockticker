@@ -307,6 +307,23 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 16. Merge Install Scripts
+
+**Asked:** There are two install scripts (`install_service.sh`, `install_nginx.sh`) — merge them into one.
+
+**Done:**
+- Folded the nginx deployment from `install_nginx.sh` into `install_service.sh`: after installing/restarting the two systemd services, the script now reads `web_host`/`web_port` from `settings.json`, installs nginx if missing, writes `/etc/nginx/sites-available/stockticker` (proxy `/stockticker/` → Flask with prefix stripping), removes the stock default site, symlinks, runs `nginx -t`, and reloads/starts nginx. The summary prints the LAN URL (http://<LAN-IP>/stockticker) plus the cheat sheet.
+- Deleted `install_nginx.sh`.
+- Extended `uninstall_service.sh` to also remove the nginx stockticker site (symlink + config, `nginx -t` + reload); the nginx package and the local database are left untouched.
+- `bash -n` and shellcheck v0.10.0 both pass on install and uninstall scripts.
+- Note: `stockticker-web.service` was already part of `install_service.sh` since the web UI commit, but had never been installed on this machine (only `stockticker.service` was). The leftover manual `nohup web.py` process was stopped so the service can take port 8010.
+
+**Key decisions:**
+- One script to run: `bash install_service.sh` now covers apps + proxy; one to undo: `bash uninstall_service.sh`.
+- Uninstall removes the nginx *site* but not the nginx *package*, since nginx may host other things later.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
@@ -315,7 +332,6 @@ This log records the work done in this CLI session, in chronological order.
 - `db.py`
 - `dedup_watchlist.py`
 - `earnings_reminder.py`
-- `install_nginx.sh`
 - `install_service.sh`
 - `main.py`
 - `notify.py`
@@ -336,9 +352,8 @@ This log records the work done in this CLI session, in chronological order.
 - `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current); `--update-earnings` refreshes only the earnings table.
 - `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
 - `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8010): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar.
-- `bash install_nginx.sh` (requires sudo) deploys nginx as a reverse proxy so the UI is reachable on the LAN at http://<LAN-IP>/stockticker while Flask stays on localhost.
 - All schedule/market/earnings/db/web settings live in `settings.json`; missing file falls back to built-in defaults with a warning.
-- `bash install_service.sh` (requires sudo) installs the watcher and the web UI as systemd services.
-- `bash uninstall_service.sh` (requires sudo) removes both.
+- `bash install_service.sh` (requires sudo) installs the watcher and the web UI as systemd services AND deploys nginx as a reverse proxy, so the UI is reachable on the LAN at http://<LAN-IP>/stockticker while Flask stays on localhost.
+- `bash uninstall_service.sh` (requires sudo) removes both services and the nginx site.
 
 **Repo URL:** https://github.com/Polarwin/stockticker

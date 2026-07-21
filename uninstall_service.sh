@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Remove the stockticker systemd services and the nginx reverse proxy site.
+# The nginx package itself and the local database are left untouched.
 set -euo pipefail
 
 for SERVICE_NAME in stockticker stockticker-web; do
@@ -22,4 +24,15 @@ done
 
 sudo systemctl daemon-reload
 
-echo "stockticker services uninstalled."
+NGINX_SITE_FILE="/etc/nginx/sites-available/stockticker"
+NGINX_ENABLED_LINK="/etc/nginx/sites-enabled/stockticker"
+
+if [ -L "${NGINX_ENABLED_LINK}" ] || [ -f "${NGINX_SITE_FILE}" ]; then
+    echo "Removing nginx stockticker site..."
+    sudo rm -f "${NGINX_ENABLED_LINK}" "${NGINX_SITE_FILE}"
+    if systemctl is-active --quiet nginx 2>/dev/null; then
+        sudo nginx -t && sudo systemctl reload nginx
+    fi
+fi
+
+echo "stockticker services and nginx site uninstalled."

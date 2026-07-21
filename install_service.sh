@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
+# Install the stockticker systemd services (watcher + web UI) and deploy
+# nginx as a reverse proxy so the web UI is reachable on the LAN at
+# http://<LAN-IP>/stockticker while Flask keeps listening on localhost only.
 set -euo pipefail
 
 SERVICE_NAME="stockticker"
+WEB_SERVICE_NAME="stockticker-web"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+WEB_SERVICE_FILE="/etc/systemd/system/${WEB_SERVICE_NAME}.service"
+
+NGINX_SITE_NAME="stockticker"
+NGINX_SITE_FILE="/etc/nginx/sites-available/${NGINX_SITE_NAME}"
+NGINX_ENABLED_LINK="/etc/nginx/sites-enabled/${NGINX_SITE_NAME}"
+URL_PATH="/stockticker"
 
 # Resolve the project directory from the script location so it works when run
 # as "bash install_service.sh" from the project folder.
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${PROJECT_DIR}"
 USER_NAME="$(whoami)"
+
+# --- systemd services -------------------------------------------------------
 
 cat <<EOF | sudo tee "${SERVICE_FILE}" >/dev/null
 [Unit]
@@ -27,9 +40,6 @@ Environment=PYTHONUNBUFFERED=1
 [Install]
 WantedBy=multi-user.target
 EOF
-
-WEB_SERVICE_NAME="stockticker-web"
-WEB_SERVICE_FILE="/etc/systemd/system/${WEB_SERVICE_NAME}.service"
 
 cat <<EOF | sudo tee "${WEB_SERVICE_FILE}" >/dev/null
 [Unit]
@@ -63,9 +73,82 @@ for UNIT in "${SERVICE_NAME}" "${WEB_SERVICE_NAME}"; do
     fi
 done
 
+# --- nginx reverse proxy ----------------------------------------------------
+
+# Read the Flask bind address from settings.json (fallback: 127.0.0.1:8010).
+read -r WEB_HOST WEB_PORT <<< "$("${PROJECT_DIR}/bin/python" - <<'EOF'
+import json
+try:
+    with open("settings.json") as f:
+        s = json.load(f)
+except Exception:
+    s = {}
+print(s.get("web_host", "127.0.0.1"), s.get("web_port", 8010))
+EOF
+)"
+
+echo "Proxy target: http://${WEB_HOST}:${WEB_PORT} (Flask backend)"
+
+# Install nginx if missing.
+if ! command -v nginx >/dev/null 2>&1; then
+    echo "Installing nginx..."
+    sudo apt-get update
+    sudo apt-get install -y nginx
+fi
+
+# Write the site config. The trailing slash on proxy_pass strips the
+# /stockticker prefix, so Flask sees its normal / and /api/... paths.
+cat <<EOF | sudo tee "${NGINX_SITE_FILE}" >/dev/null
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    location = ${URL_PATH} {
+        return 301 ${URL_PATH}/;
+    }
+
+    location ${URL_PATH}/ {
+        proxy_pass http://${WEB_HOST}:${WEB_PORT}/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Prefix ${URL_PATH};
+    }
+}
+EOF
+
+# The stock "default" site also claims port 80 as default_server; remove it so
+# this config takes over. (Only affects the placeholder welcome page.)
+if [ -L /etc/nginx/sites-enabled/default ]; then
+    echo "Removing default nginx site..."
+    sudo rm /etc/nginx/sites-enabled/default
+fi
+
+sudo ln -sfn "${NGINX_SITE_FILE}" "${NGINX_ENABLED_LINK}"
+
+echo "Testing nginx config..."
+sudo nginx -t
+
+if systemctl is-active --quiet nginx 2>/dev/null; then
+    echo "Reloading nginx..."
+    sudo systemctl reload nginx
+else
+    echo "Enabling and starting nginx..."
+    sudo systemctl enable --now nginx
+fi
+
+# --- summary ----------------------------------------------------------------
+
+LAN_IP="$(hostname -I | awk '{print $1}')"
+
 echo ""
 echo "Service status:"
 sudo systemctl status --no-pager "${SERVICE_NAME}" "${WEB_SERVICE_NAME}"
+
+echo ""
+echo "Web UI: http://${LAN_IP}${URL_PATH}"
+echo "(If ufw is active, allow HTTP first: sudo ufw allow 80/tcp)"
 
 echo ""
 echo "Cheat sheet:"
@@ -75,3 +158,4 @@ echo "  Logs:     sudo journalctl -u ${SERVICE_NAME} -f"
 echo "  Web logs: sudo journalctl -u ${WEB_SERVICE_NAME} -f"
 echo "  Status:   sudo systemctl status ${SERVICE_NAME} ${WEB_SERVICE_NAME}"
 echo "  Disable:  sudo systemctl disable --now ${SERVICE_NAME} ${WEB_SERVICE_NAME}"
+echo "  Nginx:    sudo systemctl reload nginx"
