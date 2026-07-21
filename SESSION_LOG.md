@@ -154,20 +154,49 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 9. Modular Refactor with Settings File
+
+**Asked:** Split the monolithic `main.py` into modules with a `settings.json` config: move price logic to `ticker.py`, add an earnings reminder module using `Ticker.calendar`, share one Telegram sender in `notify.py`, make `main.py` an orchestrator loop with market-hours gating and a daily earnings check, keep `install_service.sh` working, test, then commit and push.
+
+**Done:**
+- Created `settings.json` with `ticker_interval_seconds` (600), `ticker_market_hours_only` (true), `market_timezone` ("America/New_York"), `market_open` ("09:30"), `market_close` ("16:00"), `earnings_remind_days` (7), `earnings_check_time` ("08:00"). `main.py` loads it with `json` and falls back to the same defaults with a warning if the file is missing or unreadable.
+- Created `notify.py` with the single shared `send_telegram(message)` (same `.env` / `python-dotenv` pattern; missing credentials warn, don't crash).
+- Created `ticker.py` with all price-fetching, % change, sorting, and formatting logic moved verbatim from `main.py`. It exposes `run_ticker_round(test=False)` returning `(console_lines, telegram_message_or_None)`; behavior is identical to the old `main.py` round.
+- Created `earnings_reminder.py` using `yf.Ticker(ticker).calendar` (`'Earnings Date'` / `'Earnings Average'`, no `get_earnings_dates`, no lxml). `run_earnings_check(days, test=False)` prints one timestamped line per match sorted by date ascending (`IBM: earnings on 2026-07-22 (in 1 day), EPS est 2.9331`, `N/A` when the estimate is missing), warns and skips per-symbol errors, and returns the matches list.
+- Rewrote `main.py` as the orchestrator:
+  - Every `ticker_interval_seconds`: when `ticker_market_hours_only` is true and the market time (stdlib `zoneinfo`) is outside Mon-Fri open..close, prints `Market closed, skipping ticker round` and skips fetch+Telegram; otherwise runs the round and sends the summary.
+  - Once per day at/after `earnings_check_time` (market timezone): runs the earnings check and sends one `📅 Earnings Reminder` Telegram message only when there are matches.
+  - `--once` runs one ticker round + one earnings check immediately (ignores schedule) and exits; `--test` is console-only (no Telegram); `--days N` overrides `earnings_remind_days`.
+- `install_service.sh` unchanged: `ExecStart` still runs `main.py`.
+- Tested `bin/python main.py --once --test` and `bin/python main.py --once --test --days 30`; both passed, with `IBM: earnings on 2026-07-22 (in 1 day), EPS est 2.9331` in the output.
+
+**Key decisions:**
+- `run_ticker_round()` prints console lines itself and returns the Telegram message for the caller to send, so `--test` only gates sending in `main.py`.
+- Symbols with no earnings date in their calendar are skipped silently; only real fetch/format errors warn.
+- The earnings check fires on the first loop iteration at/after `earnings_check_time`, tracked by market-timezone date, so it runs exactly once per day.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
 - `.gitignore`
 - `dedup_watchlist.py`
+- `earnings_reminder.py`
 - `install_service.sh`
 - `main.py`
+- `notify.py`
 - `SESSION_LOG.md` (this file)
+- `settings.json`
+- `ticker.py`
 - `uninstall_service.sh`
 - `watchlist.txt`
 
 **Runtime behavior:**
-- `python main.py --once` fetches prices for all tickers in `watchlist.txt`, sorts them by % change, prints timestamped output, and sends a Telegram summary if credentials are configured.
-- Running without `--once` repeats every 10 minutes.
+- `python main.py --once` runs one ticker round and one earnings check immediately (ignoring the schedule), prints timestamped output, and sends Telegram messages if credentials are configured.
+- Running without `--once` loops every `ticker_interval_seconds` (600), skipping ticker rounds outside market hours (Mon-Fri 09:30-16:00 America/New_York) and running the earnings reminder once per day at/after 08:00 market time.
+- `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window.
+- All schedule/market/earnings settings live in `settings.json`; missing file falls back to built-in defaults with a warning.
 - `bash install_service.sh` (requires sudo) installs the watcher as a systemd service.
 - `bash uninstall_service.sh` (requires sudo) removes it.
 

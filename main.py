@@ -1,218 +1,133 @@
-"""Stock price watcher with optional Telegram alerts."""
+"""Orchestrator loop: periodic ticker rounds and daily earnings reminders."""
 
 import argparse
-import os
+import json
 import sys
 import time
 from datetime import datetime
+from datetime import time as dt_time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-import requests
-import yfinance as yf
-from dotenv import load_dotenv
+from earnings_reminder import format_match, run_earnings_check
+from notify import send_telegram
+from ticker import run_ticker_round
 
-WATCHLIST_PATH = Path(__file__).with_name("watchlist.txt")
-DEFAULT_INTERVAL_SECONDS = 600  # 10 minutes
+SETTINGS_PATH = Path(__file__).with_name("settings.json")
 
-# Load environment variables from .env if present.
-load_dotenv()
+DEFAULT_SETTINGS = {
+    "ticker_interval_seconds": 600,
+    "ticker_market_hours_only": True,
+    "market_timezone": "America/New_York",
+    "market_open": "09:30",
+    "market_close": "16:00",
+    "earnings_remind_days": 7,
+    "earnings_check_time": "08:00",
+}
 
 
-def load_watchlist(path: Path = WATCHLIST_PATH) -> list[str]:
-    """Load tickers from the watchlist file, one per line."""
+def load_settings(path: Path = SETTINGS_PATH) -> dict:
+    """Load settings from JSON, falling back to defaults with a warning."""
     if not path.exists():
-        print(f"Watchlist file not found: {path}", file=sys.stderr)
-        raise SystemExit(1)
-
-    tickers = []
-    for line in path.read_text().splitlines():
-        ticker = line.strip().upper()
-        if ticker and not ticker.startswith("#"):
-            tickers.append(ticker)
-
-    if not tickers:
-        print(f"No tickers found in watchlist: {path}", file=sys.stderr)
-        raise SystemExit(1)
-
-    return tickers
-
-
-def fetch_price_and_change(ticker: str) -> tuple[float, float | None]:
-    """Fetch the latest close and % change vs the previous close.
-
-    Returns (latest_price, pct_change). pct_change is None when the
-    prior close is unavailable (e.g. only one trading day returned).
-
-    Raises a ValueError with a per-symbol message on failure.
-    """
-    try:
-        data = yf.Ticker(ticker)
-        history = data.history(period="2d")
-    except Exception as exc:
-        raise ValueError(f"{ticker}: fetch failed ({exc})")
-
-    if history.empty:
-        raise ValueError(f"{ticker}: no price data available")
-
-    try:
-        latest = float(history["Close"].iloc[-1])
-    except (KeyError, IndexError, TypeError) as exc:
-        raise ValueError(f"{ticker}: unexpected response format ({exc})")
-
-    if len(history) < 2:
-        return latest, None
-
-    try:
-        previous = float(history["Close"].iloc[-2])
-    except (KeyError, IndexError, TypeError) as exc:
-        return latest, None
-
-    if previous == 0:
-        return latest, None
-
-    pct_change = (latest - previous) / previous * 100
-    return latest, pct_change
-
-
-def format_change(pct_change: float | None) -> str:
-    """Format the percent change with sign and two decimals, or N/A."""
-    if pct_change is None:
-        return "N/A"
-    return f"{pct_change:+.2f}%"
-
-
-def format_price_line(
-    ticker: str,
-    price: float,
-    pct_change: float | None,
-    *,
-    for_telegram: bool = False,
-) -> str:
-    """Format one price line for console or Telegram output."""
-    change = format_change(pct_change)
-    line = f"{ticker}: ${price:.2f} ({change})"
-
-    if for_telegram:
-        if pct_change is None:
-            line = f"⚠️ {line}"
-        elif pct_change > 0:
-            line = f"🟢 {line}"
-        elif pct_change < 0:
-            line = f"🔴 {line}"
-
-    return line
-
-
-def fetch_all_prices(tickers: list[str]) -> dict[str, tuple[float, float | None] | str]:
-    """Fetch prices for all tickers, returning (price, change) or an error per symbol."""
-    results: dict[str, tuple[float, float | None] | str] = {}
-    for ticker in tickers:
-        try:
-            results[ticker] = fetch_price_and_change(ticker)
-        except ValueError as exc:
-            results[ticker] = str(exc)
-    return results
-
-
-def sort_results(
-    results: dict[str, tuple[float, float | None] | str],
-) -> list[tuple[str, tuple[float, float | None] | str]]:
-    """Sort results by % change descending; errors and N/A go at the bottom."""
-
-    def sort_key(item: tuple[str, tuple[float, float | None] | str]) -> tuple[int, float]:
-        value = item[1]
-        if isinstance(value, tuple):
-            _price, change = value
-            if change is None:
-                return (1, 0.0)
-            return (0, -change)
-        return (2, 0.0)
-
-    return sorted(results.items(), key=sort_key)
-
-
-def print_prices(
-    sorted_results: list[tuple[str, tuple[float, float | None] | str]],
-    timestamp: str,
-) -> None:
-    """Print timestamped prices/errors for each ticker."""
-    for ticker, value in sorted_results:
-        if isinstance(value, tuple):
-            price, change = value
-            print(f"{timestamp} {format_price_line(ticker, price, change)}")
-        else:
-            print(f"{timestamp} {value}")
-
-
-def format_summary(
-    sorted_results: list[tuple[str, tuple[float, float | None] | str]],
-    timestamp: str,
-) -> str:
-    """Format a single Telegram message summarizing the round."""
-    header = f"📈 Stock Update ({timestamp})"
-    lines = [header]
-    for ticker, value in sorted_results:
-        if isinstance(value, tuple):
-            price, change = value
-            lines.append(
-                format_price_line(ticker, price, change, for_telegram=True)
-            )
-        else:
-            lines.append(f"⚠️ {ticker}: {value}")
-    return "\n".join(lines)
-
-
-def send_telegram(message: str) -> None:
-    """Send a message to the configured Telegram chat.
-
-    Prints a warning and returns if Telegram credentials are missing.
-    Prints/raises a clear error if the API request fails.
-    """
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-
-    if not token or not chat_id:
         print(
-            "Warning: TELEGRAM_BOT_TOKEN and/or TELEGRAM_CHAT_ID not set; "
-            "skipping Telegram notification.",
+            f"Warning: settings file not found: {path}; using defaults.",
             file=sys.stderr,
         )
-        return
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": message}
+        return dict(DEFAULT_SETTINGS)
 
     try:
-        response = requests.post(url, json=payload, timeout=30)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        print(f"Error: failed to send Telegram message: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+        loaded = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"Warning: failed to load settings from {path} ({exc}); using defaults.",
+            file=sys.stderr,
+        )
+        return dict(DEFAULT_SETTINGS)
+
+    settings = dict(DEFAULT_SETTINGS)
+    settings.update(loaded)
+    return settings
+
+
+def is_market_open(now: datetime, market_open: str, market_close: str) -> bool:
+    """True when `now` falls inside Mon-Fri market_open..market_close."""
+    if now.weekday() >= 5:
+        return False
+    open_t = dt_time.fromisoformat(market_open)
+    close_t = dt_time.fromisoformat(market_close)
+    return open_t <= now.time() <= close_t
+
+
+def do_ticker_round(test: bool) -> None:
+    """Run one ticker round and send its Telegram message unless testing."""
+    _lines, message = run_ticker_round(test=test)
+    if message and not test:
+        send_telegram(message)
+
+
+def do_earnings_check(days: int, test: bool) -> None:
+    """Run one earnings check and send one Telegram message on matches."""
+    matches = run_earnings_check(days, test=test)
+    if matches and not test:
+        lines = [format_match(match) for match in matches]
+        send_telegram("📅 Earnings Reminder\n" + "\n".join(lines))
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fetch prices for a watchlist.")
+    parser = argparse.ArgumentParser(
+        description="Stock price watcher with earnings reminders."
+    )
     parser.add_argument(
         "--once",
         action="store_true",
-        help="Run once and exit instead of looping every 10 minutes.",
+        help="Run one ticker round and one earnings check immediately, then exit.",
+    )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Console output only; do not send Telegram messages.",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Override earnings_remind_days from settings.",
     )
     args = parser.parse_args()
 
-    tickers = load_watchlist()
+    settings = load_settings()
+    market_tz = ZoneInfo(settings["market_timezone"])
+    earnings_days = (
+        args.days if args.days is not None else settings["earnings_remind_days"]
+    )
+
+    if args.once:
+        do_ticker_round(args.test)
+        do_earnings_check(earnings_days, args.test)
+        return
+
+    interval = settings["ticker_interval_seconds"]
+    check_time = dt_time.fromisoformat(settings["earnings_check_time"])
+    last_earnings_check_date = None
 
     while True:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        results = fetch_all_prices(tickers)
-        sorted_results = sort_results(results)
-        print_prices(sorted_results, timestamp)
+        now = datetime.now(market_tz)
 
-        summary = format_summary(sorted_results, timestamp)
-        send_telegram(summary)
+        if settings["ticker_market_hours_only"] and not is_market_open(
+            now, settings["market_open"], settings["market_close"]
+        ):
+            print(
+                f"{now.strftime('%Y-%m-%d %H:%M:%S')} "
+                "Market closed, skipping ticker round"
+            )
+        else:
+            do_ticker_round(args.test)
 
-        if args.once:
-            break
-        time.sleep(DEFAULT_INTERVAL_SECONDS)
+        if now.time() >= check_time and last_earnings_check_date != now.date():
+            last_earnings_check_date = now.date()
+            do_earnings_check(earnings_days, args.test)
+
+        time.sleep(interval)
 
 
 if __name__ == "__main__":
