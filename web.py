@@ -208,7 +208,7 @@ def api_prices(symbol: str):
     try:
         rows = conn.execute(
             """
-            SELECT date, open, high, low, close FROM daily_prices
+            SELECT date, open, high, low, close, volume FROM daily_prices
             WHERE symbol = ? ORDER BY date DESC LIMIT 260
             """,
             (symbol,),
@@ -227,6 +227,7 @@ def api_prices(symbol: str):
                 {"time": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4]}
                 for r in rows
             ],
+            "volumes": [r[5] for r in rows],
             "sma5": sma(closes, 5),
             "sma20": sma(closes, 20),
             "sma50": sma(closes, 50),

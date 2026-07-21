@@ -270,6 +270,9 @@ let remindDays = 7;
 let currentSymbol = null;
 let chart = null;
 let candleSeries = null;
+let volumeSeries = null;
+let lastPriceLine = null;
+let currentEarningsDate = null;
 let maSeries = {};
 let priceData = null;
 
@@ -375,7 +378,7 @@ function clearChart() {
   document.getElementById('chart-symbol').textContent = 'Select a symbol';
   document.getElementById('ohlc-legend').textContent = '';
   document.getElementById('earnings-badge').style.display = 'none';
-  if (chart) { chart.remove(); chart = null; candleSeries = null; maSeries = {}; }
+  if (chart) { chart.remove(); chart = null; candleSeries = null; volumeSeries = null; lastPriceLine = null; maSeries = {}; }
 }
 
 function buildChart() {
@@ -393,6 +396,13 @@ function buildChart() {
     wickUpColor: '#089981', wickDownColor: '#f23645',
     borderVisible: false,
   });
+  // Volume histogram on an overlay scale pinned to the bottom 20%.
+  volumeSeries = chart.addHistogramSeries({
+    priceFormat: { type: 'volume' },
+    priceScaleId: '',
+  });
+  chart.priceScale('').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+  chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.05, bottom: 0.25 } });
   maSeries = {};
   for (const [key, color] of Object.entries(MA_COLORS)) {
     maSeries[key] = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false });
@@ -419,7 +429,52 @@ function updateLegend(bar) {
 
 function renderSeries() {
   if (!priceData || !candleSeries) return;
-  candleSeries.setData(priceData.ohlc.filter(p => p.open != null && p.close != null));
+  const bars = priceData.ohlc.filter(p => p.open != null && p.close != null);
+  candleSeries.setData(bars);
+
+  // Volume bars, colored to match their candle.
+  if (volumeSeries) {
+    const vol = [];
+    priceData.ohlc.forEach((b, i) => {
+      const v = priceData.volumes[i];
+      if (v != null && b.open != null && b.close != null) {
+        vol.push({
+          time: b.time,
+          value: v,
+          color: b.close >= b.open ? 'rgba(8,153,129,0.5)' : 'rgba(242,54,69,0.5)',
+        });
+      }
+    });
+    volumeSeries.setData(vol);
+  }
+
+  // Price line at the latest close.
+  if (lastPriceLine) { candleSeries.removePriceLine(lastPriceLine); lastPriceLine = null; }
+  if (bars.length) {
+    const last = bars[bars.length - 1];
+    lastPriceLine = candleSeries.createPriceLine({
+      price: last.close,
+      color: last.close >= last.open ? '#089981' : '#f23645',
+      lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: 'last',
+    });
+  }
+
+  // Earnings marker (only visible when the date is inside the loaded range).
+  if (currentEarningsDate && priceData.dates.includes(currentEarningsDate)) {
+    candleSeries.setMarkers([{
+      time: currentEarningsDate,
+      position: 'belowBar',
+      color: '#ffcc4d',
+      shape: 'arrowUp',
+      text: 'E',
+    }]);
+  } else {
+    candleSeries.setMarkers([]);
+  }
+
   document.querySelectorAll('.ma-toggles input').forEach(cb => {
     const series = maSeries[cb.dataset.ma];
     if (!series) return;
@@ -474,6 +529,7 @@ async function selectSymbol(sym) {
     }
 
     priceData = prices;
+    currentEarningsDate = status ? status.next_earnings : null;
     if (!chart) buildChart();
     renderSeries();
   } catch (e) {

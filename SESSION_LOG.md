@@ -359,6 +359,24 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 19. Chart Features: Volume, Markers, Price Line
+
+**Asked:** Add lightweight-charts volume histogram, series markers, and price lines to the chart.
+
+**Done:**
+- `web.py`: `GET /api/prices/X` now also returns a `volumes[]` array (aligned with `dates[]`/`ohlc[]`) from `daily_prices`.
+- `static/index.html`:
+  - Volume histogram on an overlay price scale pinned to the bottom 20% of the chart, each bar green/red to match its candle (null volumes skipped).
+  - Earnings series marker: a yellow `E` arrow below the bar on the next earnings date when it falls inside the loaded 1-year range (future dates beyond the last bar are skipped, since lightweight-charts only renders markers at existing data points).
+  - Dashed price line at the latest close, colored by candle direction, with an axis label ("last"); replaced on each symbol change.
+- Tested `/api/prices/IBM` (260 volumes) and `/api/prices/^VIX` (zero volumes handled) via test_client, then restarted the manually-run `web.py` (the systemd service stays stopped per the user's testing setup) and verified the live endpoint through nginx.
+
+**Key decisions:**
+- Volume uses the standard overlay-scale recipe (`priceScaleId: ''` + scale margins) so it never compresses the price axis.
+- The earnings marker is driven by `/api/status` (`next_earnings`), so no extra endpoint was needed.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
