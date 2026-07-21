@@ -49,6 +49,16 @@ def init_db(path: Path | str) -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS holdings (
+            symbol     TEXT PRIMARY KEY,
+            avg_price  REAL,
+            quantity   REAL,
+            updated_at TEXT
+        )
+        """
+    )
     conn.commit()
     return conn
 
@@ -99,3 +109,33 @@ def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
         "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
         (key, value),
     )
+
+
+def get_holdings(conn: sqlite3.Connection) -> dict[str, dict]:
+    """Return all holdings as {symbol: {"avg_price": float, "quantity": float}}."""
+    rows = conn.execute(
+        "SELECT symbol, avg_price, quantity FROM holdings"
+    ).fetchall()
+    return {s: {"avg_price": a, "quantity": q} for s, a, q in rows}
+
+
+def upsert_holding(
+    conn: sqlite3.Connection,
+    symbol: str,
+    avg_price: float,
+    quantity: float,
+    updated_at: str,
+) -> None:
+    """Insert or replace the holding for a symbol."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO holdings (symbol, avg_price, quantity, updated_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (symbol, avg_price, quantity, updated_at),
+    )
+
+
+def delete_holding(conn: sqlite3.Connection, symbol: str) -> None:
+    """Remove the holding for a symbol (no error when absent)."""
+    conn.execute("DELETE FROM holdings WHERE symbol = ?", (symbol,))

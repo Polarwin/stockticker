@@ -463,6 +463,26 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 25. Portfolio Tracking in the Web Watchlist
+
+**Asked:** Add portfolio columns to the watchlist — average buying price, quantity bought, total market value, gain/loss, and percentage of the total portfolio — with user-selectable ascending/descending sort on each column.
+
+**Done:**
+- `db.py`: new `holdings(symbol TEXT PRIMARY KEY, avg_price REAL, quantity REAL, updated_at TEXT)` table plus `get_holdings`/`upsert_holding`/`delete_holding` helpers.
+- `web.py`: `GET /api/holdings` (all holdings), `POST /api/holdings {symbol, avg_price, quantity}` (validated: symbol format, numbers >= 0), `DELETE /api/holdings/<symbol>`.
+- `static/index.html`: watchlist list replaced by a sortable table in a wider (660px) panel:
+  - Columns: Symbol, Price, Chg%, Avg Buy, Qty, Value (qty × live price), G/L ($ and % vs avg buy), Port% (share of total position value), plus ✎/✕ actions per row.
+  - Click any column header to sort; click again to flip direction (▲/▼ indicator, persisted in localStorage; symbols without data sink to the bottom).
+  - ✎ edit button prompts for avg buy price and quantity, saves via `POST /api/holdings`; totals footer row shows portfolio value, total G/L, and 100%.
+  - Values use the live quotes (same batched fetch as prices), so the portfolio updates on refresh.
+- Verified headless: seeded IBM 10@$180.50 and AAPL 5@$300 → IBM row `$2,114.10 / +$309 (+17.12%) / 56.4%`, AAPL `43.6%`, footer `Total $3,748.85 +$444 (+13.43%)`; Value-header sort flips IBM/AAPL order desc/asc; invalid POST rejected with 400; no page errors. Test holdings were deleted afterwards, leaving an empty portfolio for the user to fill.
+
+**Key decisions:**
+- Holdings live in SQLite (not watchlist.txt) so they survive watchlist removal — deleting a symbol keeps its holding, which returns if the symbol is re-added.
+- Sorting is client-side over already-fetched quotes/holdings, so it's instant and needs no new endpoints per sort.
+
+---
+
 ## Final Project State
 
 **Tracked files:**

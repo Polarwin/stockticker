@@ -39,7 +39,7 @@
     border-radius: 8px;
     padding: 12px;
   }
-  #watchlist-panel { width: 300px; flex-shrink: 0; }
+  #watchlist-panel { width: 660px; flex-shrink: 0; }
   #chart-panel { flex-grow: 1; min-width: 0; }
 
   /* --- add symbol --- */
@@ -83,38 +83,57 @@
   #autocomplete .sym { font-weight: 600; }
   #autocomplete .name { color: var(--muted); font-size: 12px; margin-left: 6px; }
 
-  /* --- watchlist --- */
-  #watchlist { list-style: none; margin: 12px 0 0; padding: 0; max-height: 520px; overflow-y: auto; }
-  #watchlist li {
-    display: flex;
-    align-items: center;
-    padding: 7px 8px;
-    border-radius: 4px;
+  /* --- watchlist / portfolio table --- */
+  #watchlist-scroll { margin-top: 12px; max-height: 520px; overflow: auto; }
+  #watchlist-table { border-collapse: collapse; font-size: 12px; width: 100%; white-space: nowrap; }
+  #watchlist-table th {
+    text-align: right;
+    color: var(--muted);
+    font-weight: 500;
+    padding: 5px 6px;
+    border-bottom: 1px solid var(--border);
     cursor: pointer;
-    gap: 6px;
+    user-select: none;
+    position: sticky;
+    top: 0;
+    background: var(--panel);
   }
-  #watchlist li:hover { background: var(--bg); }
-  #watchlist li.selected { background: var(--accent); }
-  #watchlist li.selected .quote, #watchlist li.selected .chg { color: #fff; }
-  .wl-sym { font-weight: 600; flex-grow: 1; }
-  .wl-right { text-align: right; line-height: 1.2; }
-  .quote { font-size: 13px; }
-  .chg { font-size: 11px; }
-  .chg.up { color: var(--up); }
-  .chg.down { color: var(--down); }
-  .chg.na { color: var(--muted); }
-  .del-btn {
+  #watchlist-table th:first-child, #watchlist-table td:first-child { text-align: left; }
+  #watchlist-table th.sorted { color: var(--text); }
+  #watchlist-table td {
+    text-align: right;
+    padding: 5px 6px;
+    border-bottom: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  #watchlist-table tbody tr { cursor: pointer; }
+  #watchlist-table tbody tr:hover { background: var(--bg); }
+  #watchlist-table tbody tr.selected { background: var(--accent); }
+  #watchlist-table tbody tr.selected td { color: #fff; }
+  #watchlist-table tfoot td {
+    border-bottom: none;
+    border-top: 2px solid var(--border);
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .wl-sym { font-weight: 600; }
+  .up { color: var(--up); }
+  .down { color: var(--down); }
+  .na { color: var(--muted); }
+  .del-btn, .edit-btn {
     background: none;
     border: none;
     color: var(--muted);
     cursor: pointer;
-    font-size: 13px;
-    padding: 2px 4px;
+    font-size: 12px;
+    padding: 2px 3px;
     border-radius: 3px;
     visibility: hidden;
   }
-  #watchlist li:hover .del-btn { visibility: visible; }
+  #watchlist-table tbody tr:hover .del-btn,
+  #watchlist-table tbody tr:hover .edit-btn { visibility: visible; }
   .del-btn:hover { color: var(--down); background: var(--panel); }
+  .edit-btn:hover { color: var(--accent); background: var(--panel); }
 
   /* --- chart --- */
   #chart-header {
@@ -210,7 +229,7 @@
   @media (max-width: 768px) {
     .layout { flex-direction: column; }
     #watchlist-panel { width: 100%; }
-    #watchlist { max-height: 260px; }
+    #watchlist-scroll { max-height: 320px; }
     #chart { height: 320px; }
     .range-btns { margin-left: 0; }
   }
@@ -239,7 +258,25 @@
       <div id="autocomplete"></div>
     </div>
     <div id="ac-debug"></div>
-    <ul id="watchlist"></ul>
+    <div id="watchlist-scroll">
+      <table id="watchlist-table">
+        <thead>
+          <tr>
+            <th data-sort="symbol">Symbol</th>
+            <th data-sort="price">Price</th>
+            <th data-sort="change">Chg%</th>
+            <th data-sort="avg">Avg Buy</th>
+            <th data-sort="qty">Qty</th>
+            <th data-sort="value">Value</th>
+            <th data-sort="gl">G/L</th>
+            <th data-sort="weight">Port%</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="watchlist-body"></tbody>
+        <tfoot id="watchlist-foot"></tfoot>
+      </table>
+    </div>
   </div>
 
   <div class="panel" id="chart-panel">
@@ -327,11 +364,26 @@ async function loadQuotes() {
   }
 }
 
-// --- watchlist ---
+// --- watchlist / portfolio table ---
+let holdings = {};
+let sortState = { key: 'change', dir: -1 };
+try {
+  const saved = JSON.parse(localStorage.getItem('wlSort') || 'null');
+  if (saved && saved.key) sortState = saved;
+} catch (e) {}
+
+async function loadHoldings() {
+  try {
+    return await api('api/holdings');
+  } catch (e) {
+    return {}; // older backend without /api/holdings
+  }
+}
+
 async function loadWatchlist() {
   let symbols;
   try {
-    symbols = await api('api/watchlist');
+    [symbols, holdings] = await Promise.all([api('api/watchlist'), loadHoldings()]);
   } catch (e) {
     toast('Failed to load watchlist');
     return;
@@ -343,58 +395,185 @@ async function loadWatchlist() {
     .catch(() => {});
 }
 
-function renderWatchlist(symbols, quotes) {
-  const ul = document.getElementById('watchlist');
-  ul.innerHTML = '';
-  // Sort by % change descending; symbols without quote data go at the bottom.
-  symbols = symbols.slice().sort((a, b) => {
-    const ca = (quotes[a] || {}).change_pct;
-    const cb = (quotes[b] || {}).change_pct;
-    if (ca == null && cb == null) return a.localeCompare(b);
-    if (ca == null) return 1;
-    if (cb == null) return -1;
-    return cb - ca;
-  });
-  for (const sym of symbols) {
+const SORT_KEYS = {
+  symbol: r => r.symbol,
+  price: r => r.price,
+  change: r => r.change_pct,
+  avg: r => r.avg_price,
+  qty: r => r.quantity,
+  value: r => r.value,
+  gl: r => r.gl_pct,
+  weight: r => r.weight,
+};
+
+function buildRows(symbols, quotes) {
+  const rows = symbols.map(sym => {
     const q = quotes[sym] || {};
-    const li = document.createElement('li');
-    li.dataset.symbol = sym;
-    if (sym === currentSymbol) li.classList.add('selected');
+    const h = holdings[sym] || {};
+    const price = q.price != null ? q.price : null;
+    const avg = h.avg_price != null ? h.avg_price : null;
+    const qty = h.quantity != null ? h.quantity : null;
+    const hasPosition = avg != null && qty != null && qty > 0;
+    const value = hasPosition && price != null ? qty * price : null;
+    const gl_abs = hasPosition && price != null ? (price - avg) * qty : null;
+    const gl_pct = hasPosition && price != null && avg > 0 ? (price - avg) / avg * 100 : null;
+    return {
+      symbol: sym, price, change_pct: q.change_pct != null ? q.change_pct : null,
+      avg_price: hasPosition ? avg : null, quantity: hasPosition ? qty : null,
+      value, gl_abs, gl_pct, weight: null,
+    };
+  });
+  const totalValue = rows.reduce((sum, r) => sum + (r.value || 0), 0);
+  const totalCost = rows.reduce((sum, r) => sum + (r.avg_price != null ? r.avg_price * r.quantity : 0), 0);
+  rows.forEach(r => {
+    if (r.value != null && totalValue > 0) r.weight = r.value / totalValue * 100;
+  });
+  return { rows, totalValue, totalCost };
+}
 
-    const label = document.createElement('span');
-    label.className = 'wl-sym';
-    label.textContent = sym;
-    label.addEventListener('click', () => selectSymbol(sym));
+function sortRows(rows) {
+  const getter = SORT_KEYS[sortState.key] || SORT_KEYS.change;
+  return rows.slice().sort((a, b) => {
+    const va = getter(a), vb = getter(b);
+    if (va == null && vb == null) return a.symbol.localeCompare(b.symbol);
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === 'string') return sortState.dir * va.localeCompare(vb);
+    return sortState.dir * (va - vb);
+  });
+}
 
-    const right = document.createElement('span');
-    right.className = 'wl-right';
-    const chgClass = q.change_pct == null ? 'na' : (q.change_pct >= 0 ? 'up' : 'down');
-    right.innerHTML =
-      '<div class="quote">' + (q.price != null ? '$' + q.price.toFixed(2) : '') + '</div>' +
-      '<div class="chg ' + chgClass + '">' + fmtPct(q.change_pct) + '</div>';
-    right.addEventListener('click', () => selectSymbol(sym));
+function fmtMoney(v) { return v == null ? '—' : '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtQty(v) { return v == null ? '—' : String(v); }
+function colorClass(v) { return v == null ? 'na' : (v >= 0 ? 'up' : 'down'); }
 
+function renderWatchlist(symbols, quotes) {
+  const tbody = document.getElementById('watchlist-body');
+  const tfoot = document.getElementById('watchlist-foot');
+  tbody.innerHTML = '';
+  tfoot.innerHTML = '';
+
+  const { rows, totalValue, totalCost } = buildRows(symbols, quotes);
+  const sorted = sortRows(rows);
+
+  // Header sort indicators.
+  document.querySelectorAll('#watchlist-table th[data-sort]').forEach(th => {
+    const active = th.dataset.sort === sortState.key;
+    th.classList.toggle('sorted', active);
+    th.textContent = th.dataset.label + (active ? (sortState.dir < 0 ? ' ▼' : ' ▲') : '');
+  });
+
+  for (const r of sorted) {
+    const tr = document.createElement('tr');
+    tr.dataset.symbol = r.symbol;
+    if (r.symbol === currentSymbol) tr.classList.add('selected');
+
+    const glText = r.gl_abs == null ? '—'
+      : (r.gl_abs >= 0 ? '+' : '-') + '$' + Math.abs(r.gl_abs).toLocaleString('en-US', { maximumFractionDigits: 0 }) +
+        ' (' + fmtPct(r.gl_pct) + ')';
+
+    const cells = [
+      { text: r.symbol, cls: 'wl-sym' },
+      { text: r.price != null ? '$' + r.price.toFixed(2) : '—' },
+      { text: fmtPct(r.change_pct), cls: colorClass(r.change_pct) },
+      { text: r.avg_price != null ? '$' + r.avg_price.toFixed(2) : '—' },
+      { text: fmtQty(r.quantity) },
+      { text: fmtMoney(r.value) },
+      { text: glText, cls: colorClass(r.gl_abs) },
+      { text: r.weight != null ? r.weight.toFixed(1) + '%' : '—' },
+    ];
+    cells.forEach(c => {
+      const td = document.createElement('td');
+      td.textContent = c.text;
+      if (c.cls) td.className = c.cls;
+      tr.appendChild(td);
+    });
+
+    tr.addEventListener('click', () => selectSymbol(r.symbol));
+
+    const actions = document.createElement('td');
+    const edit = document.createElement('button');
+    edit.className = 'edit-btn';
+    edit.textContent = '✎';
+    edit.title = 'Edit holding for ' + r.symbol;
+    edit.addEventListener('click', (e) => { e.stopPropagation(); editHolding(r.symbol); });
     const del = document.createElement('button');
     del.className = 'del-btn';
     del.textContent = '✕';
-    del.title = 'Remove ' + sym;
+    del.title = 'Remove ' + r.symbol;
     del.addEventListener('click', async (e) => {
       e.stopPropagation();
-      if (!confirm('Remove ' + sym + ' from the watchlist? (price history is kept)')) return;
+      if (!confirm('Remove ' + r.symbol + ' from the watchlist? (price history and holding are kept)')) return;
       try {
-        await api('api/watchlist/' + encodeURIComponent(sym), { method: 'DELETE' });
+        await api('api/watchlist/' + encodeURIComponent(r.symbol), { method: 'DELETE' });
       } catch (err) { toast('Delete failed'); return; }
-      if (currentSymbol === sym) { currentSymbol = null; clearChart(); }
+      if (currentSymbol === r.symbol) { currentSymbol = null; clearChart(); }
       loadWatchlist();
       loadEarnings(currentRange());
     });
+    actions.appendChild(edit);
+    actions.appendChild(del);
+    tr.appendChild(actions);
 
-    li.appendChild(label);
-    li.appendChild(right);
-    li.appendChild(del);
-    ul.appendChild(li);
+    tbody.appendChild(tr);
+  }
+
+  if (totalValue > 0) {
+    const totalGl = totalValue - totalCost;
+    const totalGlPct = totalCost > 0 ? totalGl / totalCost * 100 : null;
+    const tr = document.createElement('tr');
+    const label = document.createElement('td');
+    label.textContent = 'Total';
+    tr.appendChild(label);
+    for (let i = 0; i < 4; i++) tr.appendChild(document.createElement('td'));
+    const val = document.createElement('td');
+    val.textContent = fmtMoney(totalValue);
+    tr.appendChild(val);
+    const gl = document.createElement('td');
+    gl.textContent = (totalGl >= 0 ? '+' : '-') + '$' + Math.abs(totalGl).toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' (' + fmtPct(totalGlPct) + ')';
+    gl.className = colorClass(totalGl);
+    tr.appendChild(gl);
+    const w = document.createElement('td');
+    w.textContent = '100%';
+    tr.appendChild(w);
+    tr.appendChild(document.createElement('td'));
+    tfoot.appendChild(tr);
   }
 }
+
+async function editHolding(sym) {
+  const h = holdings[sym] || {};
+  const avgInput = prompt('Average buy price for ' + sym + ' (USD):', h.avg_price != null ? h.avg_price : '');
+  if (avgInput === null) return;
+  const qtyInput = prompt('Quantity of ' + sym + ' shares:', h.quantity != null ? h.quantity : '');
+  if (qtyInput === null) return;
+  const avg = parseFloat(avgInput);
+  const qty = parseFloat(qtyInput);
+  if (isNaN(avg) || isNaN(qty) || avg < 0 || qty < 0) { toast('Invalid numbers'); return; }
+  try {
+    await api('api/holdings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: sym, avg_price: avg, quantity: qty }),
+    });
+  } catch (e) { toast('Failed to save holding'); return; }
+  holdings = await loadHoldings();
+  loadWatchlist();
+}
+
+// Column sorting: click a header to sort, click again to flip direction.
+document.querySelectorAll('#watchlist-table th[data-sort]').forEach(th => {
+  th.dataset.label = th.textContent;
+  th.addEventListener('click', () => {
+    if (sortState.key === th.dataset.sort) {
+      sortState.dir = -sortState.dir;
+    } else {
+      sortState = { key: th.dataset.sort, dir: th.dataset.sort === 'symbol' ? 1 : -1 };
+    }
+    try { localStorage.setItem('wlSort', JSON.stringify(sortState)); } catch (e) {}
+    loadWatchlist();
+  });
+});
 
 // --- chart ---
 function clearChart() {
@@ -609,8 +788,8 @@ function applyRange(days) {
 async function selectSymbol(sym) {
   currentSymbol = sym;
   try { localStorage.setItem('selectedSymbol', sym); } catch (e) {}
-  document.querySelectorAll('#watchlist li').forEach(li =>
-    li.classList.toggle('selected', li.dataset.symbol === sym));
+  document.querySelectorAll('#watchlist-body tr').forEach(tr =>
+    tr.classList.toggle('selected', tr.dataset.symbol === sym));
   document.getElementById('chart-symbol').textContent = sym;
   document.getElementById('chart-loading').style.display = 'flex';
 
@@ -831,8 +1010,8 @@ document.querySelectorAll('.tab').forEach(tab =>
   loadEarnings('week');
   let initial = null;
   try { initial = localStorage.getItem('selectedSymbol'); } catch (e) {}
-  const li = initial && document.querySelector('#watchlist li[data-symbol="' + initial + '"]');
-  const first = li || document.querySelector('#watchlist li');
+  const tr = initial && document.querySelector('#watchlist-body tr[data-symbol="' + initial + '"]');
+  const first = tr || document.querySelector('#watchlist-body tr');
   if (first) selectSymbol(first.dataset.symbol);
 })();
 </script>

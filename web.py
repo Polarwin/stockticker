@@ -11,7 +11,15 @@ import yfinance as yf
 from flask import Flask, jsonify, request, send_from_directory
 
 from collector import fetch_history_rows
-from db import init_db, resolve_db_path, upsert_earnings, upsert_prices
+from db import (
+    delete_holding,
+    get_holdings,
+    init_db,
+    resolve_db_path,
+    upsert_earnings,
+    upsert_holding,
+    upsert_prices,
+)
 from earnings_reminder import get_earnings_info
 from indicators import macd, rsi
 from main import load_settings
@@ -209,6 +217,55 @@ def api_quotes():
         finally:
             conn.close()
     return jsonify(quotes)
+
+
+@app.get("/api/holdings")
+def api_holdings():
+    """All portfolio holdings as {symbol: {avg_price, quantity}}."""
+    conn = open_db()
+    try:
+        return jsonify(get_holdings(conn))
+    finally:
+        conn.close()
+
+
+@app.post("/api/holdings")
+def api_holdings_set():
+    """Set the avg buy price and quantity for a symbol."""
+    data = request.get_json(force=True, silent=True) or {}
+    symbol = str(data.get("symbol", "")).strip().upper()
+    if not SYMBOL_RE.match(symbol):
+        return jsonify({"error": "invalid symbol"}), 400
+    try:
+        avg_price = float(data.get("avg_price"))
+        quantity = float(data.get("quantity"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "avg_price and quantity must be numbers"}), 400
+    if avg_price < 0 or quantity < 0:
+        return jsonify({"error": "avg_price and quantity must be >= 0"}), 400
+
+    conn = open_db()
+    try:
+        upsert_holding(
+            conn, symbol, avg_price, quantity, datetime.now(MARKET_TZ).isoformat()
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "symbol": symbol})
+
+
+@app.delete("/api/holdings/<symbol>")
+def api_holdings_delete(symbol: str):
+    """Remove the holding for a symbol."""
+    symbol = symbol.strip().upper()
+    conn = open_db()
+    try:
+        delete_holding(conn, symbol)
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "symbol": symbol})
 
 
 @app.get("/api/search")
