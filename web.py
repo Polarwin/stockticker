@@ -136,29 +136,77 @@ def search_static(query: str) -> list[dict]:
     return (prefix + substring)[:10]
 
 
+def fetch_live_quotes(symbols: list[str]) -> dict:
+    """Batch-fetch the latest price and % change vs previous close from yfinance.
+
+    Returns {symbol: {"price": float, "change_pct": float|None}}; symbols that
+    fail are simply omitted (caller falls back to DB values).
+    """
+    try:
+        data = yf.download(
+            " ".join(symbols),
+            period="2d",
+            group_by="ticker",
+            threads=True,
+            progress=False,
+        )
+    except Exception as exc:
+        print(f"Warning: live quotes fetch failed ({exc})")
+        return {}
+
+    quotes = {}
+    for symbol in symbols:
+        try:
+            closes = (
+                data[symbol]["Close"].dropna()
+                if len(symbols) > 1
+                else data["Close"].dropna()
+            )
+            if closes.empty:
+                continue
+            price = float(closes.iloc[-1])
+            change_pct = None
+            if len(closes) > 1 and float(closes.iloc[-2]):
+                change_pct = round(
+                    (price - float(closes.iloc[-2])) / float(closes.iloc[-2]) * 100, 2
+                )
+            quotes[symbol] = {"price": round(price, 2), "change_pct": change_pct}
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+    return quotes
+
+
 @app.get("/api/quotes")
 def api_quotes():
-    """Latest close and % change vs the previous day for each watchlist symbol."""
-    conn = open_db()
-    quotes = {}
-    try:
-        for symbol in read_watchlist():
-            rows = conn.execute(
-                """
-                SELECT close FROM daily_prices
-                WHERE symbol = ? ORDER BY date DESC LIMIT 2
-                """,
-                (symbol,),
-            ).fetchall()
-            if not rows or rows[0][0] is None:
-                continue
-            price = rows[0][0]
-            change_pct = None
-            if len(rows) == 2 and rows[1][0]:
-                change_pct = round((price - rows[1][0]) / rows[1][0] * 100, 2)
-            quotes[symbol] = {"price": round(price, 2), "change_pct": change_pct}
-    finally:
-        conn.close()
+    """Live price and % change vs previous close for each watchlist symbol.
+
+    Batch-fetched from yfinance; symbols that fail fall back to the latest
+    values stored in daily_prices.
+    """
+    symbols = read_watchlist()
+    quotes = fetch_live_quotes(symbols)
+
+    missing = [s for s in symbols if s not in quotes]
+    if missing:
+        conn = open_db()
+        try:
+            for symbol in missing:
+                rows = conn.execute(
+                    """
+                    SELECT close FROM daily_prices
+                    WHERE symbol = ? ORDER BY date DESC LIMIT 2
+                    """,
+                    (symbol,),
+                ).fetchall()
+                if not rows or rows[0][0] is None:
+                    continue
+                price = rows[0][0]
+                change_pct = None
+                if len(rows) == 2 and rows[1][0]:
+                    change_pct = round((price - rows[1][0]) / rows[1][0] * 100, 2)
+                quotes[symbol] = {"price": round(price, 2), "change_pct": change_pct}
+        finally:
+            conn.close()
     return jsonify(quotes)
 
 

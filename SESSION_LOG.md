@@ -426,6 +426,21 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 23. Live Prices in the Web Watchlist
+
+**Asked:** Show real-time prices in the web watchlist, especially on page refresh (prices were stale — from the once-daily DB update).
+
+**Done:**
+- `web.py`: `/api/quotes` now batch-fetches live quotes with a single `yf.download(..., period="2d", group_by="ticker", threads=True)` call for all watchlist symbols (~1.4s for 42 symbols) instead of reading the once-daily `daily_prices` table. Symbols missing from the batch fall back to the latest DB values; total failure falls back entirely.
+- `static/index.html`: `loadWatchlist()` renders the symbol list immediately, then patches in prices and re-sorts (gainers first) when live quotes arrive — split into `renderWatchlist(symbols, quotes)`.
+- Verified: live endpoint returns 42 symbols in 1.4s (BABA -1.9% live vs +4.67% stale DB); headless Chromium shows the list rendered and re-sorted with live prices (TER $363.79 +9.00% at top), no page errors. PLTR absent because the user deleted it from the watchlist while testing (its 252 DB rows are kept, as designed).
+
+**Key decisions:**
+- One batched `yf.download` instead of 42 individual `yf.Ticker` calls — ~10x faster and a single point of failure handling.
+- % change stays "vs previous close" — same definition as the legend and console ticker.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
