@@ -32,6 +32,7 @@ from main import (
     do_earnings_check,
     do_earnings_report_check,
     do_earnings_watch,
+    do_premarket_report,
     do_ticker_round,
     is_market_open,
     load_settings,
@@ -456,16 +457,19 @@ def _notification_loop() -> None:
 
     Always on: the daily earnings reminder and earnings-report check at
     earnings_check_time (plus a refresh of the earnings table the
-    post-earnings watch relies on), and the post-earnings watch every
+    post-earnings watch relies on), the pre-market portfolio report on
+    weekdays at premarket_check_time, and the post-earnings watch every
     minute. On top of that, watchlist price rounds are sent to Telegram
     every ticker_interval_seconds while the UI toggle
     (/api/ticker-alerts) is enabled. All state is DB-driven, so restarts
     neither lose windows nor resend messages.
     """
     check_time = dt_time.fromisoformat(SETTINGS["earnings_check_time"])
+    premarket_time = dt_time.fromisoformat(SETTINGS["premarket_check_time"])
     interval = int(SETTINGS["ticker_interval_seconds"])
     earnings_days = int(SETTINGS["earnings_remind_days"])
     last_check_date = None
+    last_premarket_date = None
     last_ticker_round = 0.0
     while True:
         now = datetime.now(MARKET_TZ)
@@ -477,6 +481,14 @@ def _notification_loop() -> None:
                 update_earnings(SETTINGS)
                 do_earnings_check(earnings_days, test=False)
                 do_earnings_report_check(SETTINGS, test=False)
+            if (
+                SETTINGS["premarket_report_enabled"]
+                and now.weekday() < 5
+                and now.time() >= premarket_time
+                and last_premarket_date != now.date()
+            ):
+                last_premarket_date = now.date()
+                do_premarket_report(SETTINGS, test=False)
             do_earnings_watch(SETTINGS, test=False)
             if (
                 ticker_alerts_enabled()

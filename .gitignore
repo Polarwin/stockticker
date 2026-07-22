@@ -20,3 +20,6 @@ __pycache__/
 
 # Generated sector heatmap
 sector_heatmap.html
+
+# Runtime logs
+*.log
