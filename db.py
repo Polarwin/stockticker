@@ -78,6 +78,28 @@ def init_db(path: Path | str) -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS earnings_watch (
+            symbol           TEXT NOT NULL,
+            earnings_date    TEXT NOT NULL,
+            baseline_quarter TEXT,
+            detected_at      TEXT,
+            last_tick_at     TEXT,
+            PRIMARY KEY (symbol, earnings_date)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS earnings_watch_news (
+            symbol  TEXT NOT NULL,
+            news_id TEXT NOT NULL,
+            sent_at TEXT,
+            PRIMARY KEY (symbol, news_id)
+        )
+        """
+    )
     # Migration for databases created before the industry column existed.
     sector_cols = [r[1] for r in conn.execute("PRAGMA table_info(sectors)")]
     if "industry" not in sector_cols:
@@ -235,4 +257,81 @@ def upsert_sector(
         VALUES (?, ?, ?, ?)
         """,
         (symbol, sector, industry, updated_at),
+    )
+
+
+def get_earnings_on(conn: sqlite3.Connection, day_iso: str) -> dict:
+    """Return {symbol: eps_estimate} for symbols whose earnings date is day_iso."""
+    rows = conn.execute(
+        "SELECT symbol, eps_estimate FROM earnings WHERE earnings_date = ?",
+        (day_iso,),
+    ).fetchall()
+    return {symbol: eps for symbol, eps in rows}
+
+
+def get_watch_state(
+    conn: sqlite3.Connection, symbol: str, earnings_date: str
+) -> dict | None:
+    """Return the earnings-watch row as a dict, or None when absent."""
+    row = conn.execute(
+        """
+        SELECT baseline_quarter, detected_at, last_tick_at
+        FROM earnings_watch WHERE symbol = ? AND earnings_date = ?
+        """,
+        (symbol, earnings_date),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "baseline_quarter": row[0],
+        "detected_at": row[1],
+        "last_tick_at": row[2],
+    }
+
+
+def upsert_watch_state(
+    conn: sqlite3.Connection,
+    symbol: str,
+    earnings_date: str,
+    baseline_quarter: str | None,
+    detected_at: str | None,
+    last_tick_at: str | None,
+) -> None:
+    """Insert or replace the earnings-watch row for a symbol/date."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO earnings_watch
+            (symbol, earnings_date, baseline_quarter, detected_at, last_tick_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (symbol, earnings_date, baseline_quarter, detected_at, last_tick_at),
+    )
+
+
+def delete_old_watch_state(conn: sqlite3.Connection, before_date: str) -> None:
+    """Remove earnings-watch rows for earnings dates before `before_date`."""
+    conn.execute(
+        "DELETE FROM earnings_watch WHERE earnings_date < ?", (before_date,)
+    )
+
+
+def news_already_sent(conn: sqlite3.Connection, symbol: str, news_id: str) -> bool:
+    """True when this news item was already sent for the symbol."""
+    row = conn.execute(
+        "SELECT 1 FROM earnings_watch_news WHERE symbol = ? AND news_id = ?",
+        (symbol, news_id),
+    ).fetchone()
+    return row is not None
+
+
+def mark_news_sent(
+    conn: sqlite3.Connection, symbol: str, news_id: str, sent_at: str
+) -> None:
+    """Record that a news item was sent for the symbol."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO earnings_watch_news (symbol, news_id, sent_at)
+        VALUES (?, ?, ?)
+        """,
+        (symbol, news_id, sent_at),
     )

@@ -589,6 +589,24 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 32. Post-Earnings Watch, Web-Only Service, UI Price-Alert Toggle
+
+**Asked:** After earnings the price is volatile — track it every 10 minutes for ~2 hours after the release and send news too, especially guidance. Then: make the notifications work when only `stockticker-web` runs (not the `stockticker` daemon). Finally: remove the `stockticker` service entirely and add a UI toggle for the realtime Telegram price messages; earnings reminder/notification stays always on.
+
+**Done:**
+- New `earnings_watch.py`: on a symbol's earnings day (dates from the DB `earnings` table, refreshed daily from the same yfinance calendar as the reminder), seeds the latest reported quarter as baseline, then polls every loop tick (06:00–20:00 market time) until a newer quarter appears in `get_earnings_history()` — that marks the release. From detection for `earnings_watch_duration_minutes` (120), `run_watch_tick()` builds one Telegram message per `earnings_watch_interval_minutes` (10) with the live extended-hours price; the first message embeds the full `earnings_report.format_report()` body. Fresh Yahoo Finance news rides along, guidance/outlook/forecast items tagged 🔮, others 📰, each with its link. State lives in new `db.py` tables `earnings_watch` / `earnings_watch_news` (+ helpers `get_earnings_on`, `get_watch_state`, `upsert_watch_state`, `delete_old_watch_state`, `news_already_sent`, `mark_news_sent`), so restarts neither lose the window nor resend news.
+- `main.py`: `--earnings-watch` one-shot flag, `do_earnings_watch()` wired into the daemon loop, and new defaults `earnings_watch_enabled` / `_interval_minutes` / `_duration_minutes` (also added to `settings.json`).
+- `web.py`: new `_notification_loop()` background thread started in `main()` — the web service now runs all notifications itself: daily at `earnings_check_time` it refreshes the earnings table and sends the earnings reminder + earnings-report check; every minute it advances the post-earnings watch; and while the UI toggle is on it sends a watchlist price round every `ticker_interval_seconds` (respecting `ticker_market_hours_only`). The loop catches `BaseException` so a `send_telegram` `SystemExit` can't kill it.
+- UI toggle: `GET/POST /api/ticker-alerts` persists `ticker_alerts_enabled` in the DB `meta` table (falls back to `settings.json` `ticker_enabled` until first set); `static/index.html` adds a "🔔 Telegram price alerts" checkbox in the header that loads/saves it.
+- `install_service.sh` no longer creates the `stockticker` watcher unit — only `stockticker-web` (web UI with built-in notifications) plus nginx. The old `stockticker` service was removed from systemctl; `uninstall_service.sh` still removes everything.
+- Verified: `main.py --earnings-watch --test` seeded TSLA/GOOG/IBM baselines on their earnings day; a simulated detection on a scratch DB produced the full watch message with report body + tagged news links; from the web process the 08:00 ET daily run refreshed 39 earnings rows and ran the report check; the toggle API GET/POST works and enabling it fired one real Telegram price round while disabling stopped further rounds.
+
+**Key decisions:**
+- Release detection compares the latest quarter in `get_earnings_history()` against a per-symbol baseline (yfinance `calendar` has no time of day; `get_earnings_dates()` needs lxml, which is not installed) — detection lags the release by at most one tick (~10 min).
+- The toggle lives in the DB `meta` table rather than rewriting `settings.json`, so flipping it needs no file writes or restarts.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
@@ -598,6 +616,7 @@ This log records the work done in this CLI session, in chronological order.
 - `dedup_watchlist.py`
 - `earnings_reminder.py`
 - `earnings_report.py`
+- `earnings_watch.py`
 - `generate_sector_heatmap.py`
 - `indicators.py`
 - `install_service.sh`
@@ -622,9 +641,9 @@ This log records the work done in this CLI session, in chronological order.
 - `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current); `--update-earnings` refreshes only the earnings table; `--signals` checks MACD/RSI crossovers and exits. After the scheduled daily DB update, crossover alerts are checked automatically and sent via Telegram when found.
 - `--sector-heatmap` generates `sector_heatmap.html` — a self-contained Plotly treemap of the portfolio grouped by sector (box size = sector weight, green/red = value-weighted daily change) — and exits. Sectors are cached in the `sectors` DB table; ETFs/unknowns fall into "Unknown". Sectors holding industries in `heatmap_split_industries` split into per-industry sub-boxes; stocks at/above `heatmap_stock_threshold_pct` portfolio weight get their own box. Tests: `bin/python -m unittest test_sector_heatmap`.
 - `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
-- `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8010): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar.
-- All schedule/market/earnings/db/web settings live in `settings.json`; missing file falls back to built-in defaults with a warning.
-- `bash install_service.sh` (requires sudo) installs the watcher and the web UI as systemd services AND deploys nginx as a reverse proxy, so the UI is reachable on the LAN at http://<LAN-IP>/stockticker while Flask stays on localhost.
+- `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8010): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar. A background thread in the same process runs all Telegram notifications: daily earnings reminder + earnings-report check at `earnings_check_time`, the post-earnings watch every minute (10-min price + news messages for 2h after a release is detected), and — while the header "Telegram price alerts" toggle is on — a watchlist price round every `ticker_interval_seconds`.
+- All schedule/market/earnings/db/web settings live in `settings.json`; missing file falls back to built-in defaults with a warning. The price-alert toggle is stored in the DB `meta` table.
+- `bash install_service.sh` (requires sudo) installs the web UI as the `stockticker-web` systemd service AND deploys nginx as a reverse proxy, so the UI is reachable on the LAN at http://<LAN-IP>/stockticker while Flask stays on localhost. (There is no longer a separate watcher service; notifications run inside the web process.)
 - `bash uninstall_service.sh` (requires sudo) removes both services and the nginx site.
 
 **Repo URL:** https://github.com/Polarwin/stockticker

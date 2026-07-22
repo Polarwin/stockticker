@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Install the stockticker systemd services (watcher + web UI) and deploy
-# nginx as a reverse proxy so the web UI is reachable on the LAN at
-# http://<LAN-IP>/stockticker while Flask keeps listening on localhost only.
+# Install the stockticker-web systemd service (web UI with built-in Telegram
+# notifications: earnings reminders/reports, post-earnings watch, and
+# optional price alerts toggled from the UI) and deploy nginx as a reverse
+# proxy so the web UI is reachable on the LAN at http://<LAN-IP>/stockticker
+# while Flask keeps listening on localhost only.
 set -euo pipefail
 
-SERVICE_NAME="stockticker"
 WEB_SERVICE_NAME="stockticker-web"
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 WEB_SERVICE_FILE="/etc/systemd/system/${WEB_SERVICE_NAME}.service"
 
 NGINX_SITE_NAME="stockticker"
@@ -20,26 +20,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${PROJECT_DIR}"
 USER_NAME="$(whoami)"
 
-# --- systemd services -------------------------------------------------------
-
-cat <<EOF | sudo tee "${SERVICE_FILE}" >/dev/null
-[Unit]
-Description=Stock price watcher with Telegram alerts
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=${USER_NAME}
-WorkingDirectory=${PROJECT_DIR}
-ExecStart=${PROJECT_DIR}/bin/python ${PROJECT_DIR}/main.py
-Restart=always
-RestartSec=10
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=multi-user.target
-EOF
+# --- systemd service --------------------------------------------------------
 
 cat <<EOF | sudo tee "${WEB_SERVICE_FILE}" >/dev/null
 [Unit]
@@ -64,14 +45,12 @@ sudo systemctl daemon-reload
 
 # Idempotent start/restart: enable & start if not running, otherwise restart
 # so the updated unit file takes effect.
-for UNIT in "${SERVICE_NAME}" "${WEB_SERVICE_NAME}"; do
-    if systemctl is-active --quiet "${UNIT}" 2>/dev/null; then
-        echo "${UNIT} is already running; restarting with updated unit..."
-        sudo systemctl restart "${UNIT}"
-    else
-        sudo systemctl enable --now "${UNIT}"
-    fi
-done
+if systemctl is-active --quiet "${WEB_SERVICE_NAME}" 2>/dev/null; then
+    echo "${WEB_SERVICE_NAME} is already running; restarting with updated unit..."
+    sudo systemctl restart "${WEB_SERVICE_NAME}"
+else
+    sudo systemctl enable --now "${WEB_SERVICE_NAME}"
+fi
 
 # --- nginx reverse proxy ----------------------------------------------------
 
@@ -144,7 +123,7 @@ LAN_IP="$(hostname -I | awk '{print $1}')"
 
 echo ""
 echo "Service status:"
-sudo systemctl status --no-pager "${SERVICE_NAME}" "${WEB_SERVICE_NAME}"
+sudo systemctl status --no-pager "${WEB_SERVICE_NAME}"
 
 echo ""
 echo "Web UI: http://${LAN_IP}${URL_PATH}"
@@ -152,10 +131,9 @@ echo "(If ufw is active, allow HTTP first: sudo ufw allow 80/tcp)"
 
 echo ""
 echo "Cheat sheet:"
-echo "  Restart:  sudo systemctl restart ${SERVICE_NAME} ${WEB_SERVICE_NAME}"
-echo "  Stop:     sudo systemctl stop ${SERVICE_NAME} ${WEB_SERVICE_NAME}"
-echo "  Logs:     sudo journalctl -u ${SERVICE_NAME} -f"
-echo "  Web logs: sudo journalctl -u ${WEB_SERVICE_NAME} -f"
-echo "  Status:   sudo systemctl status ${SERVICE_NAME} ${WEB_SERVICE_NAME}"
-echo "  Disable:  sudo systemctl disable --now ${SERVICE_NAME} ${WEB_SERVICE_NAME}"
+echo "  Restart:  sudo systemctl restart ${WEB_SERVICE_NAME}"
+echo "  Stop:     sudo systemctl stop ${WEB_SERVICE_NAME}"
+echo "  Logs:     sudo journalctl -u ${WEB_SERVICE_NAME} -f"
+echo "  Status:   sudo systemctl status ${WEB_SERVICE_NAME}"
+echo "  Disable:  sudo systemctl disable --now ${WEB_SERVICE_NAME}"
 echo "  Nginx:    sudo systemctl reload nginx"

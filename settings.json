@@ -13,6 +13,9 @@
   "db_backfill_days": 365,
   "web_host": "127.0.0.1",
   "web_port": 8010,
+  "earnings_watch_enabled": true,
+  "earnings_watch_interval_minutes": 10,
+  "earnings_watch_duration_minutes": 120,
   "heatmap_split_industries": ["Semiconductors", "Semiconductor Equipment & Materials"],
   "heatmap_stock_threshold_pct": 5.0
 }

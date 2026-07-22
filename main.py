@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from collector import check_signals, db_update_due, update_database, update_earnings
 from earnings_reminder import format_match, run_earnings_check
 from earnings_report import check_new_reports
+from earnings_watch import run_watch_tick
 from notify import send_telegram
 from ticker import run_ticker_round
 
@@ -32,6 +33,9 @@ DEFAULT_SETTINGS = {
     "db_backfill_days": 365,
     "web_host": "127.0.0.1",
     "web_port": 8010,
+    "earnings_watch_enabled": True,
+    "earnings_watch_interval_minutes": 10,
+    "earnings_watch_duration_minutes": 120,
 }
 
 
@@ -93,6 +97,17 @@ def do_earnings_report_check(settings: dict, test: bool) -> None:
             print(message)
 
 
+def do_earnings_watch(settings: dict, test: bool) -> None:
+    """Advance post-earnings watches; send one Telegram message per update."""
+    messages = run_watch_tick(settings, test=test)
+    if not test:
+        for message in messages:
+            send_telegram(message)
+    else:
+        for message in messages:
+            print(message)
+
+
 def do_signal_check(settings: dict, test: bool) -> None:
     """Check for MACD/RSI crossovers and send one Telegram alert on signals."""
     signals = check_signals(settings, test=test)
@@ -145,6 +160,11 @@ def main() -> None:
         help="Check MACD/RSI crossovers immediately, then exit.",
     )
     parser.add_argument(
+        "--earnings-watch",
+        action="store_true",
+        help="Run one post-earnings watch tick immediately, then exit.",
+    )
+    parser.add_argument(
         "--sector-heatmap",
         action="store_true",
         help="Generate the sector allocation heatmap (sector_heatmap.html), then exit.",
@@ -171,6 +191,10 @@ def main() -> None:
 
     if args.signals:
         do_signal_check(settings, args.test)
+        return
+
+    if args.earnings_watch:
+        do_earnings_watch(settings, args.test)
         return
 
     if args.sector_heatmap:
@@ -213,6 +237,8 @@ def main() -> None:
             last_earnings_check_date = now.date()
             do_earnings_check(earnings_days, args.test)
             do_earnings_report_check(settings, args.test)
+
+        do_earnings_watch(settings, args.test)
 
         if (
             settings["db_enabled"]

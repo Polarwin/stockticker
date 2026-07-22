@@ -2,28 +2,40 @@
 
 import json
 import re
+import threading
+import time
 from calendar import monthrange
 from datetime import datetime, timedelta
+from datetime import time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import yfinance as yf
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
-from collector import fetch_history_rows
+from collector import fetch_history_rows, update_earnings
 from db import (
     delete_holding,
     get_holdings,
     get_latest_quotes,
+    get_meta,
     init_db,
     resolve_db_path,
+    set_meta,
     upsert_earnings,
     upsert_holding,
     upsert_prices,
 )
 from earnings_reminder import get_earnings_info
 from indicators import macd, rsi
-from main import load_settings
+from main import (
+    do_earnings_check,
+    do_earnings_report_check,
+    do_earnings_watch,
+    do_ticker_round,
+    is_market_open,
+    load_settings,
+)
 from ticker import WATCHLIST_PATH, fetch_live_quotes
 
 SETTINGS = load_settings()
@@ -89,6 +101,46 @@ def heatmap():
 @app.get("/api/config")
 def api_config():
     return jsonify({"earnings_remind_days": SETTINGS["earnings_remind_days"]})
+
+
+def ticker_alerts_enabled() -> bool:
+    """UI toggle for Telegram price rounds, persisted in the DB meta table.
+
+    Falls back to the ticker_enabled setting until the toggle is first set.
+    """
+    conn = open_db()
+    try:
+        value = get_meta(conn, "ticker_alerts_enabled")
+    finally:
+        conn.close()
+    if value is None:
+        return bool(SETTINGS["ticker_enabled"])
+    return value == "true"
+
+
+@app.get("/api/ticker-alerts")
+def api_ticker_alerts_get():
+    """Current state of the Telegram price-alert toggle."""
+    return jsonify(
+        {
+            "enabled": ticker_alerts_enabled(),
+            "interval_seconds": int(SETTINGS["ticker_interval_seconds"]),
+        }
+    )
+
+
+@app.post("/api/ticker-alerts")
+def api_ticker_alerts_set():
+    """Enable or disable Telegram price alerts."""
+    data = request.get_json(force=True, silent=True) or {}
+    enabled = bool(data.get("enabled"))
+    conn = open_db()
+    try:
+        set_meta(conn, "ticker_alerts_enabled", "true" if enabled else "false")
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "enabled": enabled})
 
 
 @app.get("/api/watchlist")
@@ -399,7 +451,52 @@ def api_status(symbol: str):
     )
 
 
+def _notification_loop() -> None:
+    """Background notifications, replacing the old stockticker daemon.
+
+    Always on: the daily earnings reminder and earnings-report check at
+    earnings_check_time (plus a refresh of the earnings table the
+    post-earnings watch relies on), and the post-earnings watch every
+    minute. On top of that, watchlist price rounds are sent to Telegram
+    every ticker_interval_seconds while the UI toggle
+    (/api/ticker-alerts) is enabled. All state is DB-driven, so restarts
+    neither lose windows nor resend messages.
+    """
+    check_time = dt_time.fromisoformat(SETTINGS["earnings_check_time"])
+    interval = int(SETTINGS["ticker_interval_seconds"])
+    earnings_days = int(SETTINGS["earnings_remind_days"])
+    last_check_date = None
+    last_ticker_round = 0.0
+    while True:
+        now = datetime.now(MARKET_TZ)
+        # BaseException: send_telegram raises SystemExit on API failure,
+        # which must not kill this thread.
+        try:
+            if now.time() >= check_time and last_check_date != now.date():
+                last_check_date = now.date()
+                update_earnings(SETTINGS)
+                do_earnings_check(earnings_days, test=False)
+                do_earnings_report_check(SETTINGS, test=False)
+            do_earnings_watch(SETTINGS, test=False)
+            if (
+                ticker_alerts_enabled()
+                and time.monotonic() - last_ticker_round >= interval
+                and (
+                    not SETTINGS["ticker_market_hours_only"]
+                    or is_market_open(
+                        now, SETTINGS["market_open"], SETTINGS["market_close"]
+                    )
+                )
+            ):
+                last_ticker_round = time.monotonic()
+                do_ticker_round(test=False)
+        except BaseException as exc:
+            print(f"Warning: notification loop error ({exc})")
+        time.sleep(60)
+
+
 def main() -> None:
+    threading.Thread(target=_notification_loop, daemon=True).start()
     app.run(host=SETTINGS["web_host"], port=int(SETTINGS["web_port"]))
 
 

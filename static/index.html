@@ -32,6 +32,10 @@
     align-items: center;
   }
   header .hint { font-weight: 400; font-size: 12px; color: var(--muted); }
+  header .alert-toggle {
+    font-size: 12px; color: var(--muted); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 4px; user-select: none;
+  }
   header .heatmap-link { font-size: 12px; color: var(--accent); text-decoration: none; }
   header .heatmap-link:hover { text-decoration: underline; }
   .layout { display: flex; gap: 12px; padding: 12px 16px; }
@@ -241,6 +245,9 @@
 <header>
   <span>📈 Stockticker</span>
   <a class="heatmap-link" href="heatmap" target="_blank" rel="noopener">🗺 Sector Heatmap</a>
+  <label class="alert-toggle" title="Send watchlist price updates to Telegram every few minutes">
+    <input type="checkbox" id="toggle-alerts"> 🔔 Telegram price alerts
+  </label>
   <span class="hint">Click a symbol to view its chart · hover the chart for OHLC</span>
 </header>
 
@@ -1006,9 +1013,34 @@ document.querySelectorAll('.tab').forEach(tab =>
     loadEarnings(tab.dataset.range);
   }));
 
+// --- Telegram price-alert toggle (state lives server-side in the DB) ---
+async function initAlertToggle() {
+  const box = document.getElementById('toggle-alerts');
+  try {
+    const state = await api('api/ticker-alerts');
+    box.checked = !!state.enabled;
+  } catch (e) { /* leave unchecked on error */ }
+  box.addEventListener('change', async () => {
+    try {
+      await api('api/ticker-alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: box.checked }),
+      });
+      toast(box.checked
+        ? 'Telegram price alerts enabled'
+        : 'Telegram price alerts disabled');
+    } catch (e) {
+      box.checked = !box.checked;
+      toast('Failed to update alert setting');
+    }
+  });
+}
+
 // --- init ---
 (async () => {
   await loadConfig();
+  initAlertToggle();
   await loadWatchlist();
   loadEarnings('week');
   let initial = null;
