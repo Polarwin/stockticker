@@ -70,6 +70,15 @@
     cursor: pointer;
   }
   #add-btn:hover { filter: brightness(1.15); }
+  #refresh-btn {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--muted);
+    padding: 8px 10px;
+    cursor: pointer;
+  }
+  #refresh-btn:hover { color: var(--text); border-color: var(--accent); }
   #autocomplete {
     position: absolute;
     top: 100%;
@@ -121,6 +130,9 @@
     border-top: 2px solid var(--border);
     font-weight: 600;
     color: var(--muted);
+    position: sticky;
+    bottom: 0;
+    background: var(--panel);
   }
   .wl-sym { font-weight: 600; }
   .up { color: var(--up); }
@@ -265,6 +277,7 @@
     <div id="add-row">
       <input id="add-input" placeholder="Add symbol…" autocomplete="off">
       <button id="add-btn">Add</button>
+      <button id="refresh-btn" title="Refresh prices">⟳</button>
       <div id="autocomplete"></div>
     </div>
     <div id="ac-debug"></div>
@@ -275,6 +288,7 @@
             <th data-sort="symbol">Symbol</th>
             <th data-sort="price">Price</th>
             <th data-sort="change">Chg%</th>
+            <th data-sort="daygl">Day G/L</th>
             <th data-sort="avg">Avg Buy</th>
             <th data-sort="qty">Qty</th>
             <th data-sort="value">Value</th>
@@ -376,6 +390,7 @@ async function loadQuotes() {
 
 // --- watchlist / portfolio table ---
 let holdings = {};
+let watchlistSymbols = [];
 let sortState = { key: 'change', dir: -1 };
 try {
   const saved = JSON.parse(localStorage.getItem('wlSort') || 'null');
@@ -398,17 +413,27 @@ async function loadWatchlist() {
     toast('Failed to load watchlist');
     return;
   }
+  watchlistSymbols = symbols;
   // Render immediately, then patch in live quotes (and re-sort) when they arrive.
   renderWatchlist(symbols, {});
-  loadQuotes()
-    .then(quotes => renderWatchlist(symbols, quotes))
-    .catch(() => {});
+  refreshQuotes();
+}
+
+// Re-fetch live quotes and re-render, so price, Chg%, Day G/L, Value, G/L,
+// Port% and the totals all reflect the latest prices.
+async function refreshQuotes() {
+  if (!watchlistSymbols.length) return;
+  try {
+    const quotes = await loadQuotes();
+    renderWatchlist(watchlistSymbols, quotes);
+  } catch (e) { /* keep stale values on failure */ }
 }
 
 const SORT_KEYS = {
   symbol: r => r.symbol,
   price: r => r.price,
   change: r => r.change_pct,
+  daygl: r => r.day_gl,
   avg: r => r.avg_price,
   qty: r => r.quantity,
   value: r => r.value,
@@ -427,18 +452,22 @@ function buildRows(symbols, quotes) {
     const value = hasPosition && price != null ? qty * price : null;
     const gl_abs = hasPosition && price != null ? (price - avg) * qty : null;
     const gl_pct = hasPosition && price != null && avg > 0 ? (price - avg) / avg * 100 : null;
+    const prevClose = q.prev_close != null ? q.prev_close : null;
+    const day_gl = hasPosition && price != null && prevClose != null ? (price - prevClose) * qty : null;
     return {
       symbol: sym, price, change_pct: q.change_pct != null ? q.change_pct : null,
+      day_gl,
       avg_price: hasPosition ? avg : null, quantity: hasPosition ? qty : null,
       value, gl_abs, gl_pct, weight: null,
     };
   });
   const totalValue = rows.reduce((sum, r) => sum + (r.value || 0), 0);
   const totalCost = rows.reduce((sum, r) => sum + (r.avg_price != null ? r.avg_price * r.quantity : 0), 0);
+  const totalDayGl = rows.reduce((sum, r) => sum + (r.day_gl || 0), 0);
   rows.forEach(r => {
     if (r.value != null && totalValue > 0) r.weight = r.value / totalValue * 100;
   });
-  return { rows, totalValue, totalCost };
+  return { rows, totalValue, totalCost, totalDayGl };
 }
 
 function sortRows(rows) {
@@ -463,7 +492,7 @@ function renderWatchlist(symbols, quotes) {
   tbody.innerHTML = '';
   tfoot.innerHTML = '';
 
-  const { rows, totalValue, totalCost } = buildRows(symbols, quotes);
+  const { rows, totalValue, totalCost, totalDayGl } = buildRows(symbols, quotes);
   const sorted = sortRows(rows);
 
   // Header sort indicators.
@@ -481,11 +510,14 @@ function renderWatchlist(symbols, quotes) {
     const glText = r.gl_abs == null ? '—'
       : (r.gl_abs >= 0 ? '+' : '-') + '$' + Math.abs(r.gl_abs).toLocaleString('en-US', { maximumFractionDigits: 0 }) +
         ' (' + fmtPct(r.gl_pct) + ')';
+    const dayGlText = r.day_gl == null ? '—'
+      : (r.day_gl >= 0 ? '+' : '-') + '$' + Math.abs(r.day_gl).toLocaleString('en-US', { maximumFractionDigits: 0 });
 
     const cells = [
       { text: r.symbol, cls: 'wl-sym' },
       { text: r.price != null ? '$' + r.price.toFixed(2) : '—' },
       { text: fmtPct(r.change_pct), cls: colorClass(r.change_pct) },
+      { text: dayGlText, cls: colorClass(r.day_gl) },
       { text: r.avg_price != null ? '$' + r.avg_price.toFixed(2) : '—' },
       { text: fmtQty(r.quantity) },
       { text: fmtMoney(r.value) },
@@ -531,11 +563,20 @@ function renderWatchlist(symbols, quotes) {
   if (totalValue > 0) {
     const totalGl = totalValue - totalCost;
     const totalGlPct = totalCost > 0 ? totalGl / totalCost * 100 : null;
+    const prevTotalValue = totalValue - totalDayGl;
+    const totalDayGlPct = prevTotalValue > 0 ? totalDayGl / prevTotalValue * 100 : null;
     const tr = document.createElement('tr');
     const label = document.createElement('td');
     label.textContent = 'Total';
     tr.appendChild(label);
-    for (let i = 0; i < 4; i++) tr.appendChild(document.createElement('td'));
+    tr.appendChild(document.createElement('td')); // Price
+    tr.appendChild(document.createElement('td')); // Chg%
+    const dayGl = document.createElement('td');
+    dayGl.textContent = (totalDayGl >= 0 ? '+' : '-') + '$' + Math.abs(totalDayGl).toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' (' + fmtPct(totalDayGlPct) + ')';
+    dayGl.className = colorClass(totalDayGl);
+    tr.appendChild(dayGl);
+    tr.appendChild(document.createElement('td')); // Avg Buy
+    tr.appendChild(document.createElement('td')); // Qty
     const val = document.createElement('td');
     val.textContent = fmtMoney(totalValue);
     tr.appendChild(val);
@@ -948,6 +989,10 @@ document.addEventListener('click', (e) => {
 document.getElementById('add-btn').addEventListener('click', () => {
   addSymbol(addInput.value.trim().toUpperCase());
 });
+
+document.getElementById('refresh-btn').addEventListener('click', refreshQuotes);
+// Keep prices and all derived values current without a manual refresh.
+setInterval(refreshQuotes, 60000);
 
 async function addSymbol(sym) {
   acClose();

@@ -189,8 +189,8 @@ def delete_holding(conn: sqlite3.Connection, symbol: str) -> None:
 def get_latest_quotes(conn: sqlite3.Connection, symbols: list[str]) -> dict:
     """Latest close + % change vs previous close from daily_prices.
 
-    Returns {symbol: {"price": float, "change_pct": float|None}}; symbols
-    without stored closes are omitted.
+    Returns {symbol: {"price": float, "change_pct": float|None,
+    "prev_close": float|None}}; symbols without stored closes are omitted.
     """
     quotes = {}
     for symbol in symbols:
@@ -205,9 +205,15 @@ def get_latest_quotes(conn: sqlite3.Connection, symbols: list[str]) -> dict:
             continue
         price = rows[0][0]
         change_pct = None
+        prev_close = None
         if len(rows) == 2 and rows[1][0]:
-            change_pct = round((price - rows[1][0]) / rows[1][0] * 100, 2)
-        quotes[symbol] = {"price": round(price, 2), "change_pct": change_pct}
+            prev_close = rows[1][0]
+            change_pct = round((price - prev_close) / prev_close * 100, 2)
+        quotes[symbol] = {
+            "price": round(price, 2),
+            "change_pct": change_pct,
+            "prev_close": round(prev_close, 2) if prev_close is not None else None,
+        }
     return quotes
 
 

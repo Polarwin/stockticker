@@ -125,8 +125,9 @@ def fetch_live_quotes(symbols: list[str]) -> dict:
     measured against the previous regular-session close (same definition as
     before). Falls back to daily bars when the intraday fetch fails.
 
-    Returns {symbol: {"price": float, "change_pct": float|None}}; symbols that
-    fail are simply omitted (caller falls back to DB values).
+    Returns {symbol: {"price": float, "change_pct": float|None,
+    "prev_close": float|None}}; symbols that fail are simply omitted
+    (caller falls back to DB values).
     """
     if not symbols:
         return {}
@@ -187,10 +188,15 @@ def fetch_live_quotes(symbols: list[str]) -> dict:
             # Previous regular close: the last daily close before ref_date.
             previous = daily_closes[daily_closes.index.date < ref_date]
             change_pct = None
+            prev_close = None
             if not previous.empty and float(previous.iloc[-1]):
                 prev_close = float(previous.iloc[-1])
                 change_pct = round((price - prev_close) / prev_close * 100, 2)
-            quotes[symbol] = {"price": round(price, 2), "change_pct": change_pct}
+            quotes[symbol] = {
+                "price": round(price, 2),
+                "change_pct": change_pct,
+                "prev_close": round(prev_close, 2) if prev_close is not None else None,
+            }
         except (KeyError, IndexError, TypeError, ValueError):
             continue
     return quotes
