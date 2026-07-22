@@ -187,6 +187,11 @@ def main() -> None:
         action="store_true",
         help="Send the pre-market portfolio report immediately, then exit.",
     )
+    parser.add_argument(
+        "--indicators-table",
+        action="store_true",
+        help="Generate the bullish/bearish indicators table (indicators_table.html), then exit.",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
@@ -224,6 +229,12 @@ def main() -> None:
 
     if args.premarket_report:
         do_premarket_report(settings, args.test)
+        return
+
+    if args.indicators_table:
+        from generate_indicators_table import generate_indicators_table
+
+        generate_indicators_table(settings, test=args.test)
         return
 
     if args.once:

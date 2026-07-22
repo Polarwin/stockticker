@@ -74,6 +74,36 @@ def _rsi_value(avg_gain: float, avg_loss: float) -> float:
     return 100 - 100 / (1 + rs)
 
 
+def sma(values: list[float], period: int) -> list[float | None]:
+    """Simple moving average."""
+    out: list[float | None] = [None] * len(values)
+    if len(values) < period:
+        return out
+    window_sum = sum(values[:period])
+    out[period - 1] = window_sum / period
+    for i in range(period, len(values)):
+        window_sum += values[i] - values[i - period]
+        out[i] = window_sum / period
+    return out
+
+
+def bollinger_bands(
+    closes: list[float], period: int = 20, num_std: float = 2.0
+) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    """Bollinger Bands: (middle SMA, upper, lower); population std, as is customary."""
+    mid = sma(closes, period)
+    upper: list[float | None] = [None] * len(closes)
+    lower: list[float | None] = [None] * len(closes)
+    for i in range(period - 1, len(closes)):
+        mean = mid[i]
+        window = closes[i - period + 1 : i + 1]
+        variance = sum((c - mean) ** 2 for c in window) / period
+        std = variance**0.5
+        upper[i] = mean + num_std * std
+        lower[i] = mean - num_std * std
+    return mid, upper, lower
+
+
 def detect_crossovers(closes: list[float]) -> list[tuple[str, str]]:
     """Detect bullish/bearish crossovers between the last two bars.
 

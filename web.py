@@ -423,6 +423,41 @@ def api_earnings():
     )
 
 
+@app.get("/api/indicators/<symbol>")
+def api_indicators(symbol: str):
+    """Bullish/bearish confluence score and per-indicator rows for a symbol.
+
+    Computed from the local daily_prices table; null when there is not
+    enough history (< MIN_BARS closes).
+    """
+    from generate_indicators_table import (
+        MIN_BARS,
+        combine_score,
+        evaluate_indicators,
+        history_from_db,
+        score_label,
+    )
+
+    symbol = symbol.strip().upper()
+    conn = open_db()
+    try:
+        closes, volumes = history_from_db(conn, symbol)
+    finally:
+        conn.close()
+    if len(closes) < MIN_BARS:
+        return jsonify(None)
+    rows = evaluate_indicators(closes, volumes)
+    score = combine_score(rows)
+    return jsonify(
+        {
+            "symbol": symbol,
+            "score": score,
+            "label": score_label(score),
+            "rows": rows,
+        }
+    )
+
+
 @app.get("/api/status/<symbol>")
 def api_status(symbol: str):
     symbol = symbol.strip().upper()

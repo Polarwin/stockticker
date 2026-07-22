@@ -607,16 +607,40 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 33. Technical Indicators Bullish/Bearish Confluence Table
+
+**Asked:** Add a confluence scoring system that aggregates RSI, Bollinger Bands, MACD, EMA trend, and volume into a single 0-100 bullish/bearish score per stock, rendered as a dark-themed self-contained HTML table with reliability bars, a score bar, a threshold legend, and a reliability guide; new CLI flag, tests, README.
+
+**Done:**
+- `indicators.py`: added `sma()` and `bollinger_bands()` (population std, the usual convention) alongside the existing EMA/MACD/RSI. No pandas-ta — it is not installed and the project already computes indicators in pure Python.
+- New `generate_indicators_table.py`: `evaluate_indicators()` scores each of the five indicators bullish/bearish/neutral on the latest bar; each vote contributes ±(weight × reliability) (RSI 30×0.79, BB 25×0.78, MACD 20×0.40, EMA 15×0.31, Volume 10×0.55). `combine_score()` normalizes the raw sum (max ±61.3) to 0-100 with 50 = all neutral; `score_label()` maps ≥70 Strong Bullish, 50-69 Moderate Bullish, 30-49 Neutral, 10-29 Moderate Bearish, <10 Strong Bearish. `generate_indicators_table()` downloads 1y of daily bars via yfinance (per-symbol fallback to the DB `daily_prices` table), skips symbols with < 40 bars, and writes `indicators_table.html`: summary table, per-symbol cards with score bar + 5-row indicator table (color-coded reliability bars: green ≥70%, red <40%, yellow in between), threshold legend, and a win-rate-vs-return guide box.
+- `main.py`: new `--indicators-table` flag (lazy import, like `--sector-heatmap`).
+- New `test_indicators_table.py` (17 tests): RSI/SMA/Bollinger math, signal evaluation on synthetic series, score math and label thresholds, DB history fallback, HTML contents and self-containment. Run: `bin/python -m unittest test_indicators_table -v`.
+- New `README.md` with a "How to read the indicators table" section; `indicators_table.html` added to `.gitignore`.
+- Web UI integration: `web.py` gains `GET /api/indicators/<symbol>` (score + rows from the DB `daily_prices` table, `null` when < 40 bars); `static/index.html` renders a "Confluence Score" panel under the MACD/RSI panes — score bar with marker, label pill, and the 5-row indicator table with reliability bars — refreshed on every symbol selection and hidden when the API returns `null`.
+
+**Key decisions:**
+- Score normalized to 0-100 (50 = balanced) because the weighted raw sum only spans ±61.3, so the spec's 0-100-style labels require normalization.
+- RSI trend context ("in uptrend/downtrend") uses EMA9 vs EMA21.
+- MACD votes by position relative to the signal line, not a same-bar crossover — a crossover-only rule is neutral on ~97% of bars.
+- Reliability bar color order: green ≥ 70%, red < 40%, yellow otherwise (the spec's yellow 30-55% and red <40% bands overlap; red wins below 40%).
+
+**Verified:** 17 unit tests pass; real run over the watchlist produced plausible scores (BABA/META 79.6 Strong Bullish, INTC/GOOG 20.4 Moderate Bearish); SPCX correctly skipped with only 27 bars; HTML spot-checked (legend, values, marker positions).
+
+---
+
 ## Final Project State
 
 **Tracked files:**
 - `.gitignore`
+- `README.md`
 - `collector.py`
 - `db.py`
 - `dedup_watchlist.py`
 - `earnings_reminder.py`
 - `earnings_report.py`
 - `earnings_watch.py`
+- `generate_indicators_table.py`
 - `generate_sector_heatmap.py`
 - `indicators.py`
 - `install_service.sh`
@@ -626,13 +650,14 @@ This log records the work done in this CLI session, in chronological order.
 - `settings.json`
 - `static/index.html`
 - `static/symbols.json`
+- `test_indicators_table.py`
 - `test_sector_heatmap.py`
 - `ticker.py`
 - `uninstall_service.sh`
 - `watchlist.txt`
 - `web.py`
 
-(`stockticker.db` and `sector_heatmap.html` are created at runtime and gitignored.)
+(`stockticker.db`, `sector_heatmap.html`, and `indicators_table.html` are created at runtime and gitignored.)
 
 **Runtime behavior:**
 - `python main.py --once` runs one ticker round, one earnings check, and one earnings-report check immediately (ignoring the schedule), prints timestamped output, and sends Telegram messages if credentials are configured.
@@ -640,6 +665,7 @@ This log records the work done in this CLI session, in chronological order.
 - `--earnings-reports` checks for newly released earnings reports immediately and exits: the latest reported quarter per watchlist symbol is tracked in the `earnings_reports` DB table (first sighting seeds silently); a new quarter sends one Telegram message per stock with EPS vs estimate, surprise %, revenue, net income, and the latest live price.
 - `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current); `--update-earnings` refreshes only the earnings table; `--signals` checks MACD/RSI crossovers and exits. After the scheduled daily DB update, crossover alerts are checked automatically and sent via Telegram when found.
 - `--sector-heatmap` generates `sector_heatmap.html` — a self-contained Plotly treemap of the portfolio grouped by sector (box size = sector weight, green/red = value-weighted daily change) — and exits. Sectors are cached in the `sectors` DB table; ETFs/unknowns fall into "Unknown". Sectors holding industries in `heatmap_split_industries` split into per-industry sub-boxes; stocks at/above `heatmap_stock_threshold_pct` portfolio weight get their own box. Tests: `bin/python -m unittest test_sector_heatmap`.
+- `--indicators-table` generates `indicators_table.html` — a self-contained dark-themed page scoring every watchlist symbol 0-100 bullish/bearish from five indicators (RSI, Bollinger Bands, MACD, EMA 9/21 trend, volume vs SMA20): each votes bullish/bearish/neutral and contributes ±(weight × reliability), normalized so 50 = balanced. Includes a summary table, per-symbol indicator breakdown with color-coded reliability bars, threshold legend, and a win-rate guide. Daily bars come from yfinance with per-symbol fallback to the local DB; symbols with < 40 bars are skipped. Tests: `bin/python -m unittest test_indicators_table`.
 - `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
 - `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8010): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar. A background thread in the same process runs all Telegram notifications: daily earnings reminder + earnings-report check at `earnings_check_time`, the post-earnings watch every minute (10-min price + news messages for 2h after a release is detected), and — while the header "Telegram price alerts" toggle is on — a watchlist price round every `ticker_interval_seconds`.
 - All schedule/market/earnings/db/web settings live in `settings.json`; missing file falls back to built-in defaults with a warning. The price-alert toggle is stored in the DB `meta` table.

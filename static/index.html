@@ -205,6 +205,51 @@
     background: rgba(30, 34, 45, 0.7);
   }
 
+  /* --- indicators confluence table --- */
+  #indicators-panel { margin-top: 12px; }
+  #ind-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  #ind-header .ind-title { font-size: 13px; font-weight: 600; }
+  .ind-pill {
+    border: 1px solid currentColor;
+    border-radius: 10px;
+    padding: 1px 8px;
+    font-size: 11px;
+  }
+  #ind-score-num { font-size: 12px; color: var(--muted); }
+  .ind-scorebar {
+    position: relative;
+    height: 10px;
+    border-radius: 5px;
+    background: linear-gradient(90deg, var(--down) 0%, var(--muted) 50%, var(--up) 100%);
+    margin-bottom: 8px;
+  }
+  #ind-scoremark {
+    position: absolute;
+    top: -3px;
+    width: 4px;
+    height: 16px;
+    background: #fff;
+    border-radius: 2px;
+    transform: translateX(-2px);
+  }
+  #ind-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #ind-table th, #ind-table td {
+    text-align: left;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  #ind-table th { color: var(--muted); font-weight: 500; }
+  .ind-relbar {
+    display: inline-block;
+    width: 60px;
+    height: 7px;
+    vertical-align: middle;
+    background: var(--bg);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .ind-relfill { height: 100%; }
+
   /* --- earnings calendar --- */
   #calendar-panel { margin: 0 16px 16px; }
   .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
@@ -331,6 +376,20 @@
     </div>
     <div id="macd-wrap" class="indicator-pane"><div id="macd-chart"></div></div>
     <div id="rsi-wrap" class="indicator-pane"><div id="rsi-chart"></div></div>
+    <div id="indicators-panel" style="display:none">
+      <div id="ind-header">
+        <span class="ind-title">Confluence Score</span>
+        <span id="ind-score-label" class="ind-pill"></span>
+        <span id="ind-score-num"></span>
+      </div>
+      <div class="ind-scorebar"><div id="ind-scoremark"></div></div>
+      <table id="ind-table">
+        <thead>
+          <tr><th>Indicator</th><th>Current Value</th><th>Signal</th><th>Reliability</th><th>Weight</th><th>Points</th></tr>
+        </thead>
+        <tbody id="ind-body"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -631,6 +690,7 @@ function clearChart() {
   document.getElementById('chart-symbol').textContent = 'Select a symbol';
   document.getElementById('ohlc-legend').textContent = '';
   document.getElementById('earnings-badge').style.display = 'none';
+  document.getElementById('indicators-panel').style.display = 'none';
   if (chart) chart.remove();
   if (macdChart) macdChart.remove();
   if (rsiChart) rsiChart.remove();
@@ -836,6 +896,68 @@ function applyRange(days) {
   }
 }
 
+// --- indicators confluence table ---
+function indReliabilityColor(rel) {
+  if (rel >= 0.70) return 'var(--up)';
+  if (rel < 0.40) return 'var(--down)';
+  return '#d4a017';
+}
+
+function renderIndicators(data) {
+  const panel = document.getElementById('indicators-panel');
+  if (!data) { panel.style.display = 'none'; return; }
+
+  const pill = document.getElementById('ind-score-label');
+  pill.textContent = data.label;
+  pill.className = 'ind-pill ' + (data.label.includes('Bullish') ? 'up' : data.label.includes('Bearish') ? 'down' : 'na');
+  document.getElementById('ind-score-num').textContent = 'Score ' + data.score.toFixed(1) + ' / 100';
+  document.getElementById('ind-scoremark').style.left = data.score + '%';
+
+  const tbody = document.getElementById('ind-body');
+  tbody.innerHTML = '';
+  for (const row of data.rows) {
+    const tr = document.createElement('tr');
+
+    const name = document.createElement('td');
+    name.textContent = row.name;
+    tr.appendChild(name);
+
+    const value = document.createElement('td');
+    value.textContent = row.value;
+    tr.appendChild(value);
+
+    const signal = document.createElement('td');
+    signal.className = row.signal === 'bullish' ? 'up' : row.signal === 'bearish' ? 'down' : 'na';
+    signal.textContent = row.signal === 'bullish' ? '▲ Bullish' : row.signal === 'bearish' ? '▼ Bearish' : '● Neutral';
+    tr.appendChild(signal);
+
+    const rel = document.createElement('td');
+    const bar = document.createElement('span');
+    bar.className = 'ind-relbar';
+    const fill = document.createElement('div');
+    fill.className = 'ind-relfill';
+    const relPct = Math.round(row.reliability * 100);
+    fill.style.width = relPct + '%';
+    fill.style.background = indReliabilityColor(row.reliability);
+    bar.appendChild(fill);
+    rel.appendChild(bar);
+    rel.appendChild(document.createTextNode(' ' + relPct + '%'));
+    tr.appendChild(rel);
+
+    const weight = document.createElement('td');
+    weight.textContent = row.weight + ' pts';
+    tr.appendChild(weight);
+
+    const points = document.createElement('td');
+    points.textContent = row.points ? (row.points > 0 ? '+' : '') + row.points.toFixed(1) : '0';
+    points.className = row.points > 0 ? 'up' : row.points < 0 ? 'down' : 'na';
+    tr.appendChild(points);
+
+    tbody.appendChild(tr);
+  }
+  panel.style.display = '';
+}
+
 async function selectSymbol(sym) {
   currentSymbol = sym;
   try { localStorage.setItem('selectedSymbol', sym); } catch (e) {}
@@ -845,9 +967,10 @@ async function selectSymbol(sym) {
   document.getElementById('chart-loading').style.display = 'flex';
 
   try {
-    const [prices, status] = await Promise.all([
+    const [prices, status, indicators] = await Promise.all([
       api('api/prices/' + encodeURIComponent(sym)),
       api('api/status/' + encodeURIComponent(sym)),
+      api('api/indicators/' + encodeURIComponent(sym)),
     ]);
 
     const badge = document.getElementById('earnings-badge');
@@ -864,6 +987,7 @@ async function selectSymbol(sym) {
     currentEarningsDate = status ? status.next_earnings : null;
     if (!chart) buildChart();
     renderSeries();
+    renderIndicators(indicators);
   } catch (e) {
     toast('Failed to load data for ' + sym);
   } finally {
