@@ -69,6 +69,15 @@ def init_db(path: Path | str) -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS earnings_reports (
+            symbol     TEXT PRIMARY KEY,
+            quarter    TEXT,
+            updated_at TEXT
+        )
+        """
+    )
     # Migration for databases created before the industry column existed.
     sector_cols = [r[1] for r in conn.execute("PRAGMA table_info(sectors)")]
     if "industry" not in sector_cols:
@@ -178,6 +187,27 @@ def get_latest_quotes(conn: sqlite3.Connection, symbols: list[str]) -> dict:
             change_pct = round((price - rows[1][0]) / rows[1][0] * 100, 2)
         quotes[symbol] = {"price": round(price, 2), "change_pct": change_pct}
     return quotes
+
+
+def get_reported_quarter(conn: sqlite3.Connection, symbol: str) -> str | None:
+    """Return the last notified earnings-report quarter (ISO date), or None."""
+    row = conn.execute(
+        "SELECT quarter FROM earnings_reports WHERE symbol = ?", (symbol,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def upsert_reported_quarter(
+    conn: sqlite3.Connection, symbol: str, quarter: str, updated_at: str
+) -> None:
+    """Insert or replace the last notified earnings-report quarter."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO earnings_reports (symbol, quarter, updated_at)
+        VALUES (?, ?, ?)
+        """,
+        (symbol, quarter, updated_at),
+    )
 
 
 def get_sectors(conn: sqlite3.Connection) -> dict[str, dict]:

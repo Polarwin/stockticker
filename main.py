@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from collector import check_signals, db_update_due, update_database, update_earnings
 from earnings_reminder import format_match, run_earnings_check
+from earnings_report import check_new_reports
 from notify import send_telegram
 from ticker import run_ticker_round
 
@@ -81,6 +82,17 @@ def do_earnings_check(days: int, test: bool) -> None:
         send_telegram("📅 Earnings Reminder\n" + "\n".join(lines))
 
 
+def do_earnings_report_check(settings: dict, test: bool) -> None:
+    """Check for newly released earnings reports; send one message per report."""
+    messages = check_new_reports(settings, test=test)
+    if not test:
+        for message in messages:
+            send_telegram(message)
+    else:
+        for message in messages:
+            print(message)
+
+
 def do_signal_check(settings: dict, test: bool) -> None:
     """Check for MACD/RSI crossovers and send one Telegram alert on signals."""
     signals = check_signals(settings, test=test)
@@ -123,6 +135,11 @@ def main() -> None:
         help="Update the earnings table immediately, then exit.",
     )
     parser.add_argument(
+        "--earnings-reports",
+        action="store_true",
+        help="Check for newly released earnings reports immediately, then exit.",
+    )
+    parser.add_argument(
         "--signals",
         action="store_true",
         help="Check MACD/RSI crossovers immediately, then exit.",
@@ -148,6 +165,10 @@ def main() -> None:
         update_earnings(settings, test=args.test)
         return
 
+    if args.earnings_reports:
+        do_earnings_report_check(settings, args.test)
+        return
+
     if args.signals:
         do_signal_check(settings, args.test)
         return
@@ -162,6 +183,7 @@ def main() -> None:
     if args.once:
         do_ticker_round(args.test)
         do_earnings_check(earnings_days, args.test)
+        do_earnings_report_check(settings, args.test)
         return
 
     interval = settings["ticker_interval_seconds"]
@@ -190,6 +212,7 @@ def main() -> None:
         if now.time() >= check_time and last_earnings_check_date != now.date():
             last_earnings_check_date = now.date()
             do_earnings_check(earnings_days, args.test)
+            do_earnings_report_check(settings, args.test)
 
         if (
             settings["db_enabled"]

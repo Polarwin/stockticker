@@ -95,9 +95,20 @@ def format_price_line(
 
 
 def fetch_all_prices(tickers: list[str]) -> dict[str, tuple[float, float | None] | str]:
-    """Fetch prices for all tickers, returning (price, change) or an error per symbol."""
+    """Fetch prices for all tickers, returning (price, change) or an error per symbol.
+
+    Prices come from fetch_live_quotes (1-minute bars with prepost=True, so
+    they include extended-hours trading and match the web UI). Symbols the
+    batch fetch misses fall back to the per-symbol daily fetch, which also
+    provides the per-symbol error strings on failure.
+    """
+    quotes = fetch_live_quotes(tickers)
     results: dict[str, tuple[float, float | None] | str] = {}
     for ticker in tickers:
+        quote = quotes.get(ticker)
+        if quote:
+            results[ticker] = (quote["price"], quote["change_pct"])
+            continue
         try:
             results[ticker] = fetch_price_and_change(ticker)
         except ValueError as exc:

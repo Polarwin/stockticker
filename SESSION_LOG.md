@@ -559,6 +559,36 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 30. Configurable Heatmap Splits and Per-Stock Boxes
+
+**Asked:** Add the semiconductor equipment industry as a sub-industry of Technology; is there a customer settings file for the heatmap? Then: show individual stocks with weight over 5% in the heatmap.
+
+**Done:**
+- `settings.json`: new `heatmap_split_industries` (default `["Semiconductors", "Semiconductor Equipment & Materials"]`) and `heatmap_stock_threshold_pct` (5.0). There is no separate heatmap settings file — the heatmap reads the shared `settings.json`.
+- `generate_sector_heatmap.py` `aggregate_sectors()`: new `split_industries` param (any sector holding stocks from a listed industry splits into one child box per industry plus "<Sector> (other)") and `stock_threshold_pct` param (stocks at/above the portfolio-weight threshold get their own box inside their group; leftovers lumped into an "Other stocks" box so totals stay consistent). Rows now carry full treemap `id`s (e.g. `Technology/Semiconductors/NVDA`); `build_heatmap_html()` uses them.
+- Tests: `test_multiple_split_industries`, `test_stock_rows_above_threshold`, `test_stock_rows_remainder`, `test_stock_rows_remainder_lumps_small_stocks`. 13 tests, all pass. Verified live: Technology splits into Technology (other)/Semiconductors/Semiconductor Equipment & Materials with MSFT, NVDA, AMD, ASML, BIIB, UNH, BABA as stock boxes.
+
+**Key decisions:**
+- `branchvalues="total"` keeps parent values real while stock boxes nest inside split-industry children; the "Other stocks" remainder box exists only when at least one stock in the group clears the threshold.
+
+---
+
+## 31. Telegram Price Parity and Earnings-Report Notifications
+
+**Asked:** The Telegram price was still the regular-hours price — keep it the same as the main UI. Then: a new Telegram notification with the key financial data of a new earnings report plus the latest stock price.
+
+**Done:**
+- `ticker.py` `fetch_all_prices()` now sources prices from `fetch_live_quotes()` (1-minute bars, `prepost=True` — same as the web UI) and falls back to the per-symbol daily fetch only for symbols the batch misses. Console ticker and Telegram summary therefore show the same extended-hours price as the UI. Verified: `main.py --once --test` prints AA $45.09 (+1.67%), identical to `/api/quotes`.
+- New `earnings_report.py`: `fetch_earnings_report(symbol)` reads the latest reported quarter from `Ticker.get_earnings_history()` (EPS actual vs estimate, surprise %) and the matching column of `quarterly_income_stmt` (Total Revenue, Net Income). `check_new_reports(settings, test)` compares each watchlist symbol's latest quarter against the new `earnings_reports` DB table (`db.py`: table + `get_reported_quarter()`/`upsert_reported_quarter()`); first sighting seeds without notifying, a newer quarter yields one Telegram message per stock (EPS vs estimate, surprise %, revenue, net income, latest live price).
+- `main.py`: `do_earnings_report_check()` sends one message per new report; wired into the daily earnings-check slot, `--once`, and a new `--earnings-reports` flag. Test mode prints instead of sending and writes nothing to the DB.
+- Verified: first run seeded all watchlist symbols without sending; rolling MSFT's stored quarter back produced "📑 Earnings Report — MSFT (quarter ended 2026-03-31) / EPS: 4.27 vs est 4.07 (+4.9% surprise) / Revenue: $82.89B / Net income: $31.78B / Price: $398.98 (+0.31%)" in test mode with no DB write; re-run reports "No new earnings reports".
+
+**Key decisions:**
+- Detection keys on the quarter-end date from `get_earnings_history()` (API data, no scraping — `get_earnings_dates()` needs lxml, which is not installed), stored per symbol so each report notifies exactly once.
+- Seeding on first sight avoids a 29-message spam burst on first run; ETFs/indices without fundamentals (SPY, QQQ, ^VIX) are skipped via the existing per-symbol warning path.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
@@ -567,6 +597,7 @@ This log records the work done in this CLI session, in chronological order.
 - `db.py`
 - `dedup_watchlist.py`
 - `earnings_reminder.py`
+- `earnings_report.py`
 - `generate_sector_heatmap.py`
 - `indicators.py`
 - `install_service.sh`
@@ -585,10 +616,11 @@ This log records the work done in this CLI session, in chronological order.
 (`stockticker.db` and `sector_heatmap.html` are created at runtime and gitignored.)
 
 **Runtime behavior:**
-- `python main.py --once` runs one ticker round and one earnings check immediately (ignoring the schedule), prints timestamped output, and sends Telegram messages if credentials are configured.
-- Running without `--once` loops every `ticker_interval_seconds` (600). Ticker rounds only run when `ticker_enabled` is true, and are skipped outside market hours (Mon-Fri 09:30-16:00 America/New_York); the earnings reminder runs once per day at/after 08:00 market time regardless; the price database updates once per day at/after 18:00 market time when `db_enabled` is true (prices + earnings table).
+- `python main.py --once` runs one ticker round, one earnings check, and one earnings-report check immediately (ignoring the schedule), prints timestamped output, and sends Telegram messages if credentials are configured.
+- Running without `--once` loops every `ticker_interval_seconds` (600). Ticker rounds only run when `ticker_enabled` is true, and are skipped outside market hours (Mon-Fri 09:30-16:00 America/New_York); the earnings reminder and earnings-report check run once per day at/after 08:00 market time regardless; the price database updates once per day at/after 18:00 market time when `db_enabled` is true (prices + earnings table).
+- `--earnings-reports` checks for newly released earnings reports immediately and exits: the latest reported quarter per watchlist symbol is tracked in the `earnings_reports` DB table (first sighting seeds silently); a new quarter sends one Telegram message per stock with EPS vs estimate, surprise %, revenue, net income, and the latest live price.
 - `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current); `--update-earnings` refreshes only the earnings table; `--signals` checks MACD/RSI crossovers and exits. After the scheduled daily DB update, crossover alerts are checked automatically and sent via Telegram when found.
-- `--sector-heatmap` generates `sector_heatmap.html` — a self-contained Plotly treemap of the portfolio grouped by sector (box size = sector weight, green/red = value-weighted daily change) — and exits. Sectors are cached in the `sectors` DB table; ETFs/unknowns fall into "Unknown". Tests: `bin/python -m unittest test_sector_heatmap`.
+- `--sector-heatmap` generates `sector_heatmap.html` — a self-contained Plotly treemap of the portfolio grouped by sector (box size = sector weight, green/red = value-weighted daily change) — and exits. Sectors are cached in the `sectors` DB table; ETFs/unknowns fall into "Unknown". Sectors holding industries in `heatmap_split_industries` split into per-industry sub-boxes; stocks at/above `heatmap_stock_threshold_pct` portfolio weight get their own box. Tests: `bin/python -m unittest test_sector_heatmap`.
 - `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
 - `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8010): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar.
 - All schedule/market/earnings/db/web settings live in `settings.json`; missing file falls back to built-in defaults with a warning.
