@@ -141,7 +141,10 @@ def fetch_live_quotes(symbols: list[str]) -> dict:
             " ".join(symbols),
             period="5d",
             group_by="ticker",
-            threads=True,
+            # threads=False: each threaded download creates a per-symbol curl
+            # session whose sockets are only reclaimed by a full GC cycle,
+            # which leaks file descriptors in long-running processes.
+            threads=False,
             progress=False,
         )
     except Exception as exc:
@@ -156,7 +159,7 @@ def fetch_live_quotes(symbols: list[str]) -> dict:
             interval="1m",
             prepost=True,
             group_by="ticker",
-            threads=True,
+            threads=False,  # see above: threaded downloads leak FDs
             progress=False,
         )
     except Exception as exc:
