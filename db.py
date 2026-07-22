@@ -59,6 +59,20 @@ def init_db(path: Path | str) -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sectors (
+            symbol     TEXT PRIMARY KEY,
+            sector     TEXT,
+            industry   TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+    # Migration for databases created before the industry column existed.
+    sector_cols = [r[1] for r in conn.execute("PRAGMA table_info(sectors)")]
+    if "industry" not in sector_cols:
+        conn.execute("ALTER TABLE sectors ADD COLUMN industry TEXT")
     conn.commit()
     return conn
 
@@ -139,3 +153,56 @@ def upsert_holding(
 def delete_holding(conn: sqlite3.Connection, symbol: str) -> None:
     """Remove the holding for a symbol (no error when absent)."""
     conn.execute("DELETE FROM holdings WHERE symbol = ?", (symbol,))
+
+
+def get_latest_quotes(conn: sqlite3.Connection, symbols: list[str]) -> dict:
+    """Latest close + % change vs previous close from daily_prices.
+
+    Returns {symbol: {"price": float, "change_pct": float|None}}; symbols
+    without stored closes are omitted.
+    """
+    quotes = {}
+    for symbol in symbols:
+        rows = conn.execute(
+            """
+            SELECT close FROM daily_prices
+            WHERE symbol = ? AND close IS NOT NULL ORDER BY date DESC LIMIT 2
+            """,
+            (symbol,),
+        ).fetchall()
+        if not rows:
+            continue
+        price = rows[0][0]
+        change_pct = None
+        if len(rows) == 2 and rows[1][0]:
+            change_pct = round((price - rows[1][0]) / rows[1][0] * 100, 2)
+        quotes[symbol] = {"price": round(price, 2), "change_pct": change_pct}
+    return quotes
+
+
+def get_sectors(conn: sqlite3.Connection) -> dict[str, dict]:
+    """Return the cached sector/industry per symbol.
+
+    {symbol: {"sector": str, "industry": str|None}}. industry is None for
+    rows cached before the industry column existed (needs a refetch) and ""
+    when yfinance reported no industry.
+    """
+    rows = conn.execute("SELECT symbol, sector, industry FROM sectors").fetchall()
+    return {s: {"sector": sector, "industry": industry} for s, sector, industry in rows}
+
+
+def upsert_sector(
+    conn: sqlite3.Connection,
+    symbol: str,
+    sector: str,
+    industry: str,
+    updated_at: str,
+) -> None:
+    """Insert or replace the sector/industry for a symbol."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO sectors (symbol, sector, industry, updated_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (symbol, sector, industry, updated_at),
+    )

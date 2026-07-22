@@ -127,6 +127,11 @@ def main() -> None:
         action="store_true",
         help="Check MACD/RSI crossovers immediately, then exit.",
     )
+    parser.add_argument(
+        "--sector-heatmap",
+        action="store_true",
+        help="Generate the sector allocation heatmap (sector_heatmap.html), then exit.",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
@@ -145,6 +150,13 @@ def main() -> None:
 
     if args.signals:
         do_signal_check(settings, args.test)
+        return
+
+    if args.sector_heatmap:
+        # Lazy import so the daemon loop never pays for plotly.
+        from generate_sector_heatmap import generate_sector_heatmap
+
+        generate_sector_heatmap(settings, test=args.test)
         return
 
     if args.once:

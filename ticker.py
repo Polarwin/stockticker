@@ -105,6 +105,86 @@ def fetch_all_prices(tickers: list[str]) -> dict[str, tuple[float, float | None]
     return results
 
 
+def fetch_live_quotes(symbols: list[str]) -> dict:
+    """Batch-fetch the most recent price and % change vs the previous close.
+
+    The price comes from 1-minute bars with prepost=True, so it includes
+    pre- and post-market trades when those sessions are active; outside
+    extended hours it equals the regular-session price. The % change is
+    measured against the previous regular-session close (same definition as
+    before). Falls back to daily bars when the intraday fetch fails.
+
+    Returns {symbol: {"price": float, "change_pct": float|None}}; symbols that
+    fail are simply omitted (caller falls back to DB values).
+    """
+    if not symbols:
+        return {}
+
+    def closes_for(data, symbol: str):
+        # group_by="ticker" makes data[symbol] valid for one symbol or many.
+        return data[symbol]["Close"].dropna()
+
+    try:
+        daily = yf.download(
+            " ".join(symbols),
+            period="5d",
+            group_by="ticker",
+            threads=True,
+            progress=False,
+        )
+    except Exception as exc:
+        print(f"Warning: live quotes fetch failed ({exc})")
+        return {}
+
+    intraday = None
+    try:
+        intraday = yf.download(
+            " ".join(symbols),
+            period="1d",
+            interval="1m",
+            prepost=True,
+            group_by="ticker",
+            threads=True,
+            progress=False,
+        )
+    except Exception as exc:
+        print(f"Warning: extended-hours fetch failed ({exc}); using daily closes")
+
+    quotes = {}
+    for symbol in symbols:
+        try:
+            daily_closes = closes_for(daily, symbol)
+            if daily_closes.empty:
+                continue
+
+            # Most recent price: last extended-hours minute bar when
+            # available, otherwise the last daily close.
+            price = None
+            ref_date = None
+            if intraday is not None:
+                try:
+                    intra_closes = closes_for(intraday, symbol)
+                except (KeyError, IndexError, TypeError, ValueError):
+                    intra_closes = None
+                if intra_closes is not None and not intra_closes.empty:
+                    price = float(intra_closes.iloc[-1])
+                    ref_date = intra_closes.index[-1].date()
+            if price is None:
+                price = float(daily_closes.iloc[-1])
+                ref_date = daily_closes.index[-1].date()
+
+            # Previous regular close: the last daily close before ref_date.
+            previous = daily_closes[daily_closes.index.date < ref_date]
+            change_pct = None
+            if not previous.empty and float(previous.iloc[-1]):
+                prev_close = float(previous.iloc[-1])
+                change_pct = round((price - prev_close) / prev_close * 100, 2)
+            quotes[symbol] = {"price": round(price, 2), "change_pct": change_pct}
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+    return quotes
+
+
 def sort_results(
     results: dict[str, tuple[float, float | None] | str],
 ) -> list[tuple[str, tuple[float, float | None] | str]]:

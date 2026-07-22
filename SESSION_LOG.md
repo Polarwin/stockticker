@@ -483,6 +483,82 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 26. Sector Allocation Heatmap
+
+**Asked:** Add a sector allocation heatmap (treemap): group the portfolio into sectors, size each box by the sector's share of total portfolio value, color it green/red by the sector's daily change, show the change % inside each box, output a self-contained `sector_heatmap.html`, add a `python main.py --sector-heatmap` CLI command, and add tests for the aggregation math and HTML output.
+
+**Done:**
+- Installed plotly 6.9.0 into the project venv (`bin/pip install plotly`).
+- `db.py`: new `sectors(symbol TEXT PRIMARY KEY, sector TEXT, updated_at TEXT)` table created by `init_db()`, plus `get_sectors()`/`upsert_sector()` helpers. New `get_latest_quotes(conn, symbols)` helper: latest close + % change vs previous close from `daily_prices` — extracted from `web.py`'s `/api/quotes` fallback so the heatmap and the web endpoint share it.
+- `ticker.py`: `fetch_live_quotes()` moved here from `web.py` (batched `yf.download(..., period="2d", group_by="ticker")`); `web.py` now imports it, so the console ticker, web UI, and heatmap all use the same live-quote path.
+- Created `generate_sector_heatmap.py`:
+  - `fetch_sector(symbol)`: sector from `yf.Ticker(symbol).info`; per-symbol failures warn and skip; ETFs/missing data → `None` → "Unknown".
+  - `aggregate_sectors(holdings, quotes, sectors)`: pure, testable math — sector value = Σ(qty × price), weight = sector value / total, change = value-weighted average of the stocks' daily changes (None when no stock in the sector has a change). Positions with quantity ≤ 0 or no price are skipped; missing sectors count as "Unknown". Rows sorted by value descending.
+  - `build_heatmap_html(rows, generated_at)`: Plotly treemap — box area = sector value, red/green diverging colorscale (symmetric range, min ±3%, neutral grey midpoint for unknown change) with a "Daily change %" colorbar, sector name + change % inside each box, value/change on hover; `to_html(include_plotlyjs=True)` makes a single self-contained file, `config={"responsive": True}` for reflow.
+  - `generate_sector_heatmap(settings, test=False, output_path=...)`: reads holdings with quantity > 0 from the DB, fetches and caches missing sectors in the sectors table (subsequent runs do no sector fetches), gets live quotes with DB fallback, writes `sector_heatmap.html`, prints one console line per sector. Returns None (and writes nothing) when the portfolio is empty or unpriced.
+- `main.py`: new `--sector-heatmap` flag runs the generator and exits; the import is lazy so the daemon loop never loads plotly.
+- `.gitignore`: `sector_heatmap.html` (generated artifact, like `*.db`).
+- Created `test_sector_heatmap.py` (stdlib unittest, no network): 7 tests covering weights/values, value-weighted change, None change, "Unknown" fallback, empty/unpriced inputs, sort order, and HTML file output. All pass.
+- Verified end-to-end: `bin/python main.py --sector-heatmap --test` on the real 29-position portfolio → 7 sectors (Technology 55.7%, Healthcare 20.7%, …, SPY → "Unknown" as an ETF), sectors cached for all 29 symbols, 4.8 MB self-contained HTML. Headless Chromium (Playwright): all 7 sector labels render with correct ±% text, zero page errors, clean reflow at 500px width. Flask test_client: `/api/watchlist`, `/api/holdings`, `/api/prices/IBM` all still 200 after the web.py refactor.
+
+**Key decisions:**
+- Sectors are cached in SQLite (same pattern as earnings) because `Ticker.info` is a slow per-symbol fetch — first run fetches 29 sectors, later runs read the cache.
+- The heatmap prices from the live batch fetch (falling back to the DB) rather than the once-daily DB values, so the daily-change colors are current.
+- Only holdings with quantity > 0 are plotted — the watchlist alone doesn't define the portfolio.
+
+---
+
+## 27. Serve the Sector Heatmap from the Web UI
+
+**Asked:** The heatmap URL returned 404 (http://192.168.0.9/heatmap.html); then: regenerate the page with the most recent stock values on each visit and add a link from the main UI.
+
+**Done:**
+- `web.py`: new `GET /heatmap` (+ `/heatmap.html` alias) route. Each request calls `generate_sector_heatmap(SETTINGS)` (lazy import, so plotly only loads when the heatmap is requested) to regenerate `sector_heatmap.html` with live prices, then serves it via `send_file`. On regeneration failure it warns and falls back to the previously generated file; 404 with a hint when no file exists at all (e.g. empty portfolio).
+- `static/index.html`: "🗺 Sector Heatmap" link in the header (accent color, opens in a new tab). Relative `href="heatmap"` so it works both under the nginx `/stockticker/` prefix and when Flask is accessed directly.
+- Restarted `stockticker-web.service` (kill + systemd `Restart=always`, as sudo needs the user's password).
+- Verified: direct Flask and nginx (`/stockticker/heatmap` and `/stockticker/heatmap.html`) all return 200; each request rewrites `sector_heatmap.html` (mtime check, ~6s per visit for the live quote fetch + 4.8 MB write); headless Chromium shows the header link with no page errors.
+
+**Key decisions:**
+- Regenerate-on-visit rather than a separate refresh button: the heatmap is a single snapshot page, so every load is current by construction. The ~6s latency is the cost of the batched live quote fetch.
+
+---
+
+## 28. Semiconductors Sub-Industry in the Heatmap
+
+**Asked:** List semiconductors as a sub-industry of Technology in the heatmap, showing the semiconductor share of the whole portfolio.
+
+**Done:**
+- `db.py`: new `industry` column on the `sectors` table — added to `CREATE TABLE` plus a `PRAGMA table_info`/`ALTER TABLE` migration in `init_db()` for existing databases. `get_sectors()` now returns `{symbol: {"sector", "industry"}}`; `upsert_sector()` takes the industry. `industry=NULL` marks legacy cache rows (refetch once); `""` means yfinance reported no industry.
+- `generate_sector_heatmap.py`:
+  - `fetch_sector()` → `fetch_sector_info()`, returning `(sector, industry)` from `Ticker.info`.
+  - `aggregate_sectors()`: any sector holding `industry == "Semiconductors"` stocks is split into child rows "Semiconductors" and "<Sector> (other)". Row schema is now `{name, parent, value, weight_pct, change_pct}` — top-level sectors value-descending, each immediately followed by its children. Parent rows carry the combined value and value-weighted change of their children, so totals stay consistent.
+  - `build_heatmap_html()`: real treemap hierarchy via `ids`/`parents` with `branchvalues="total"` (Semiconductors renders as a sub-box inside Technology); hover now also shows "Weight: N.N% of portfolio" via customdata.
+  - Console output indents child rows: `  Semiconductors: 19.9% of portfolio ($314,371.00, +4.61%)`.
+- Tests: updated to the new row schema; new `test_semiconductor_split` (child weights vs whole portfolio, parent = sum of children, parent change = weighted average, ordering) and `test_no_split_without_semiconductors`. 9 tests, all pass.
+- Verified: `bin/python main.py --sector-heatmap --test` → Technology 55.7% splits into Technology (other) 35.8% and **Semiconductors 19.9%** of the whole portfolio; headless Chromium renders the parent/child boxes with no page errors (screenshot checked). Restarted `stockticker-web.service` so the web process drops the old cached module; nginx `/stockticker/heatmap` serves the split.
+
+**Key decisions:**
+- The split is driven by yfinance's `industry` field (exact match "Semiconductors"), not a hand-maintained ticker list — new semiconductor holdings are picked up automatically.
+- `branchvalues="total"` (parent value = sum of children) instead of "remainder" so parent boxes keep their real value in hovers.
+
+---
+
+## 29. Extended-Hours (Pre/Post-Market) Prices
+
+**Asked:** The prices come from yfinance regular-trading-hours data — use the most recent price including pre- and post-market instead.
+
+**Done:**
+- `ticker.py` `fetch_live_quotes()` rewritten: two batched `yf.download` calls — daily bars (`period="5d"`) for the previous regular-session close, and 1-minute bars (`period="1d", interval="1m", prepost=True`) for the most recent price including extended hours. Per symbol: price = last prepost minute bar (falls back to the last daily close when the intraday fetch fails or has no data); change_pct = (price − previous regular close) / previous regular close, where "previous" is the last daily close before the date of the price bar. Same change definition as before, so the console ticker, web watchlist, and heatmap stay consistent.
+- Simplified the single-symbol path: with `group_by="ticker"`, `data[symbol]["Close"]` works for one symbol or many (yfinance 1.5.1 returns MultiIndex columns even for a single symbol — the old `len(symbols) > 1` special case was broken for single-symbol calls; fixed and covered by a manual check: single/multi/empty all return correctly).
+- Verified live at 05:33 ET (pre-market): NVDA 205.13 −1.04% vs yesterday's regular close 207.29 (old code showed 207.29 from the daily bar); MSFT/BABA/SPY all consistent with their previous regular closes.
+- Regenerated the heatmap: sectors now colored by pre-market changes (Technology −0.80%, Semiconductors −1.64%). Restarted `stockticker-web.service`; `/api/quotes` serves pre-market prices (NVDA 205.05 −1.08%). 9/9 unit tests still pass (aggregation tests don't touch the network).
+
+**Key decisions:**
+- Changed the one shared quote function rather than the heatmap alone — the web watchlist and heatmap now show the same extended-hours price with the same change definition.
+- Kept % change measured against the previous regular-session close (not the previous minute bar or today's open) so extended-hours moves read as a daily change.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
@@ -491,6 +567,7 @@ This log records the work done in this CLI session, in chronological order.
 - `db.py`
 - `dedup_watchlist.py`
 - `earnings_reminder.py`
+- `generate_sector_heatmap.py`
 - `indicators.py`
 - `install_service.sh`
 - `main.py`
@@ -499,17 +576,19 @@ This log records the work done in this CLI session, in chronological order.
 - `settings.json`
 - `static/index.html`
 - `static/symbols.json`
+- `test_sector_heatmap.py`
 - `ticker.py`
 - `uninstall_service.sh`
 - `watchlist.txt`
 - `web.py`
 
-(`stockticker.db` is created at runtime and gitignored.)
+(`stockticker.db` and `sector_heatmap.html` are created at runtime and gitignored.)
 
 **Runtime behavior:**
 - `python main.py --once` runs one ticker round and one earnings check immediately (ignoring the schedule), prints timestamped output, and sends Telegram messages if credentials are configured.
 - Running without `--once` loops every `ticker_interval_seconds` (600). Ticker rounds only run when `ticker_enabled` is true, and are skipped outside market hours (Mon-Fri 09:30-16:00 America/New_York); the earnings reminder runs once per day at/after 08:00 market time regardless; the price database updates once per day at/after 18:00 market time when `db_enabled` is true (prices + earnings table).
 - `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current); `--update-earnings` refreshes only the earnings table; `--signals` checks MACD/RSI crossovers and exits. After the scheduled daily DB update, crossover alerts are checked automatically and sent via Telegram when found.
+- `--sector-heatmap` generates `sector_heatmap.html` — a self-contained Plotly treemap of the portfolio grouped by sector (box size = sector weight, green/red = value-weighted daily change) — and exits. Sectors are cached in the `sectors` DB table; ETFs/unknowns fall into "Unknown". Tests: `bin/python -m unittest test_sector_heatmap`.
 - `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
 - `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8010): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar.
 - All schedule/market/earnings/db/web settings live in `settings.json`; missing file falls back to built-in defaults with a warning.

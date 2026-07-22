@@ -8,12 +8,13 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import yfinance as yf
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory
 
 from collector import fetch_history_rows
 from db import (
     delete_holding,
     get_holdings,
+    get_latest_quotes,
     init_db,
     resolve_db_path,
     upsert_earnings,
@@ -23,13 +24,14 @@ from db import (
 from earnings_reminder import get_earnings_info
 from indicators import macd, rsi
 from main import load_settings
-from ticker import WATCHLIST_PATH
+from ticker import WATCHLIST_PATH, fetch_live_quotes
 
 SETTINGS = load_settings()
 MARKET_TZ = ZoneInfo(SETTINGS["market_timezone"])
 
 STATIC_DIR = Path(__file__).with_name("static")
 SYMBOLS_PATH = STATIC_DIR / "symbols.json"
+HEATMAP_PATH = Path(__file__).with_name("sector_heatmap.html")
 SYMBOL_RE = re.compile(r"^[A-Z.]{1,6}$")
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
@@ -59,6 +61,29 @@ def read_watchlist() -> list[str]:
 @app.get("/")
 def index():
     return send_from_directory(STATIC_DIR, "index.html")
+
+
+@app.get("/heatmap")
+@app.get("/heatmap.html")
+def heatmap():
+    """Regenerate the sector heatmap with live prices and serve it.
+
+    Falls back to the previously generated file when regeneration fails.
+    Lazy import so plotly is only loaded when the heatmap is requested.
+    """
+    from generate_sector_heatmap import generate_sector_heatmap
+
+    try:
+        generate_sector_heatmap(SETTINGS)
+    except Exception as exc:
+        print(f"Warning: heatmap regeneration failed ({exc})")
+    if not HEATMAP_PATH.exists():
+        return (
+            "Sector heatmap not available — "
+            "no holdings with quantity > 0 in the portfolio.",
+            404,
+        )
+    return send_file(HEATMAP_PATH)
 
 
 @app.get("/api/config")
@@ -145,46 +170,6 @@ def search_static(query: str) -> list[dict]:
     return (prefix + substring)[:10]
 
 
-def fetch_live_quotes(symbols: list[str]) -> dict:
-    """Batch-fetch the latest price and % change vs previous close from yfinance.
-
-    Returns {symbol: {"price": float, "change_pct": float|None}}; symbols that
-    fail are simply omitted (caller falls back to DB values).
-    """
-    try:
-        data = yf.download(
-            " ".join(symbols),
-            period="2d",
-            group_by="ticker",
-            threads=True,
-            progress=False,
-        )
-    except Exception as exc:
-        print(f"Warning: live quotes fetch failed ({exc})")
-        return {}
-
-    quotes = {}
-    for symbol in symbols:
-        try:
-            closes = (
-                data[symbol]["Close"].dropna()
-                if len(symbols) > 1
-                else data["Close"].dropna()
-            )
-            if closes.empty:
-                continue
-            price = float(closes.iloc[-1])
-            change_pct = None
-            if len(closes) > 1 and float(closes.iloc[-2]):
-                change_pct = round(
-                    (price - float(closes.iloc[-2])) / float(closes.iloc[-2]) * 100, 2
-                )
-            quotes[symbol] = {"price": round(price, 2), "change_pct": change_pct}
-        except (KeyError, IndexError, TypeError, ValueError):
-            continue
-    return quotes
-
-
 @app.get("/api/quotes")
 def api_quotes():
     """Live price and % change vs previous close for each watchlist symbol.
@@ -199,21 +184,7 @@ def api_quotes():
     if missing:
         conn = open_db()
         try:
-            for symbol in missing:
-                rows = conn.execute(
-                    """
-                    SELECT close FROM daily_prices
-                    WHERE symbol = ? ORDER BY date DESC LIMIT 2
-                    """,
-                    (symbol,),
-                ).fetchall()
-                if not rows or rows[0][0] is None:
-                    continue
-                price = rows[0][0]
-                change_pct = None
-                if len(rows) == 2 and rows[1][0]:
-                    change_pct = round((price - rows[1][0]) / rows[1][0] * 100, 2)
-                quotes[symbol] = {"price": round(price, 2), "change_pct": change_pct}
+            quotes.update(get_latest_quotes(conn, missing))
         finally:
             conn.close()
     return jsonify(quotes)

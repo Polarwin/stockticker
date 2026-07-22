@@ -17,3 +17,6 @@ __pycache__/
 
 # Local price database
 *.db
+
+# Generated sector heatmap
+sector_heatmap.html
