@@ -95,6 +95,136 @@ class TestAggregateSectors(unittest.TestCase):
         self.assertEqual([r["name"] for r in rows], ["Technology"])
         self.assertIsNone(rows[0]["parent"])
 
+    def test_multiple_split_industries(self):
+        holdings = {
+            "AAA": {"quantity": 10},  # 10 * 100 = 1000 (Tech, semiconductors)
+            "EEE": {"quantity": 4},   # 4 * 250 = 1000 (Tech, semi equipment)
+            "BBB": {"quantity": 5},   # 5 * 200 = 1000 (Tech, software)
+        }
+        quotes = {
+            "AAA": {"price": 100.0, "change_pct": 2.0},
+            "EEE": {"price": 250.0, "change_pct": 1.0},
+            "BBB": {"price": 200.0, "change_pct": -1.0},
+        }
+        sectors = {
+            "AAA": {"sector": "Technology", "industry": "Semiconductors"},
+            "EEE": {"sector": "Technology", "industry": "Semiconductor Equipment & Materials"},
+            "BBB": {"sector": "Technology", "industry": "Software - Application"},
+        }
+        rows = aggregate_sectors(
+            holdings,
+            quotes,
+            sectors,
+            split_industries=("Semiconductors", "Semiconductor Equipment & Materials"),
+        )
+        by_name = rows_by_name(rows)
+
+        # Technology splits into three children: one per split industry + other.
+        self.assertEqual(by_name["Semiconductors"]["parent"], "Technology")
+        self.assertEqual(
+            by_name["Semiconductor Equipment & Materials"]["parent"], "Technology"
+        )
+        self.assertEqual(by_name["Technology (other)"]["parent"], "Technology")
+        for name in (
+            "Semiconductors",
+            "Semiconductor Equipment & Materials",
+            "Technology (other)",
+        ):
+            self.assertAlmostEqual(by_name[name]["value"], 1000.0)
+        self.assertAlmostEqual(by_name["Semiconductor Equipment & Materials"]["change_pct"], 1.0)
+        # Parent totals equal the sum of its children.
+        self.assertAlmostEqual(by_name["Technology"]["value"], 3000.0)
+
+    def test_stock_rows_above_threshold(self):
+        holdings, quotes, sectors = make_inputs()
+        # AAA and BBB are each 33.3% of the 3000 total; CCC is 33.3% too but
+        # sits in its own sector. Threshold 30% -> every stock is "big".
+        rows = aggregate_sectors(
+            holdings, quotes, sectors, stock_threshold_pct=30.0
+        )
+        by_id = {r["id"]: r for r in rows}
+
+        # Big stocks appear under their group; AAA under the Semiconductors
+        # split child, BBB under "Technology (other)", CCC under Banks.
+        self.assertEqual(by_id["Technology/Semiconductors/AAA"]["parent"], "Technology/Semiconductors")
+        self.assertEqual(by_id["Technology/Technology (other)/BBB"]["parent"], "Technology/Technology (other)")
+        self.assertEqual(by_id["Banks/CCC"]["parent"], "Banks")
+        self.assertAlmostEqual(by_id["Technology/Semiconductors/AAA"]["value"], 1000.0)
+        self.assertAlmostEqual(by_id["Technology/Semiconductors/AAA"]["change_pct"], 2.0)
+        # No leftovers in any group -> no "Other stocks" rows.
+        self.assertNotIn("Other stocks", {r["name"] for r in rows})
+        # Parent values are unchanged (branchvalues="total" handles nesting).
+        self.assertAlmostEqual(by_id["Technology/Semiconductors"]["value"], 1000.0)
+
+    def test_stock_rows_remainder(self):
+        holdings, quotes, sectors = make_inputs()
+        # Threshold 35%: no stock qualifies -> groups keep no stock rows.
+        rows = aggregate_sectors(
+            holdings, quotes, sectors, stock_threshold_pct=35.0
+        )
+        self.assertNotIn("Other stocks", {r["name"] for r in rows})
+        self.assertEqual(len([r for r in rows if r["parent"] and "/" in r["parent"]]), 0)
+
+        # Threshold 33%: only the two 33.3% tech stocks qualify... but CCC at
+        # 33.3% also qualifies; use a threshold between to force a remainder.
+        holdings2 = {
+            "AAA": {"quantity": 10},  # 1000 of 4000 = 25%
+            "BBB": {"quantity": 5},   # 1000 = 25%
+            "CCC": {"quantity": 4},   # 2000 = 50%
+        }
+        quotes2 = {
+            "AAA": {"price": 100.0, "change_pct": 2.0},
+            "BBB": {"price": 200.0, "change_pct": -1.0},
+            "CCC": {"price": 500.0, "change_pct": 1.0},
+        }
+        sectors2 = {
+            "AAA": {"sector": "Technology", "industry": "Semiconductors"},
+            "BBB": {"sector": "Technology", "industry": "Software - Application"},
+            "CCC": {"sector": "Banks", "industry": "Banks - Diversified"},
+        }
+        rows = aggregate_sectors(holdings2, quotes2, sectors2, stock_threshold_pct=30.0)
+        by_id = {r["id"]: r for r in rows}
+
+        # Only CCC (50%) gets a stock row; Banks gets no remainder.
+        self.assertIn("Banks/CCC", by_id)
+        self.assertNotIn("Banks/Other stocks", by_id)
+        # Technology's stocks are all below threshold -> no stock rows there.
+        self.assertNotIn("Technology/Semiconductors/AAA", by_id)
+
+        # Threshold 20%: all three qualify, AAA/BBB in different tech groups.
+        rows = aggregate_sectors(holdings2, quotes2, sectors2, stock_threshold_pct=20.0)
+        names = {r["name"] for r in rows}
+        self.assertIn("AAA", names)
+        self.assertIn("BBB", names)
+        self.assertIn("CCC", names)
+
+    def test_stock_rows_remainder_lumps_small_stocks(self):
+        holdings = {
+            "AAA": {"quantity": 10},  # 1000 of 2000 = 50% (big)
+            "BBB": {"quantity": 5},   # 1000 = 50% (big too) -> force smaller:
+        }
+        # BBB 5 * 60 = 300 of 1300 = 23%: AAA 77% big, BBB remainder.
+        quotes = {
+            "AAA": {"price": 100.0, "change_pct": 2.0},
+            "BBB": {"price": 60.0, "change_pct": -1.0},
+        }
+        sectors = {
+            "AAA": {"sector": "Banks", "industry": "Banks - Diversified"},
+            "BBB": {"sector": "Banks", "industry": "Banks - Regional"},
+        }
+        rows = aggregate_sectors(holdings, quotes, sectors, stock_threshold_pct=30.0)
+        by_id = {r["id"]: r for r in rows}
+
+        self.assertAlmostEqual(by_id["Banks/AAA"]["value"], 1000.0)
+        other = by_id["Banks/Other stocks"]
+        self.assertEqual(other["parent"], "Banks")
+        self.assertAlmostEqual(other["value"], 300.0)
+        self.assertAlmostEqual(other["change_pct"], -1.0)
+        # Group total still equals stock + remainder.
+        self.assertAlmostEqual(
+            by_id["Banks"]["value"], by_id["Banks/AAA"]["value"] + other["value"]
+        )
+
     def test_weighted_daily_change_none(self):
         holdings, quotes, sectors = make_inputs()
         rows = rows_by_name(aggregate_sectors(holdings, quotes, sectors))

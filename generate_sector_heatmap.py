@@ -2,9 +2,12 @@
 
 Groups the portfolio holdings into sectors, sizes each box by the sector's
 share of the total portfolio value, and colors it green/red by the sector's
-value-weighted daily change. Sectors holding semiconductor stocks are split
-into "Semiconductors" and "<Sector> (other)" sub-boxes. Writes a
-self-contained sector_heatmap.html.
+value-weighted daily change. Sectors holding stocks in a configured split
+industry (settings.json "heatmap_split_industries", default "Semiconductors")
+are split into one sub-box per split industry plus "<Sector> (other)".
+Stocks whose portfolio weight reaches the configured threshold
+(settings.json "heatmap_stock_threshold_pct", default 5%) get their own box
+inside their group. Writes a self-contained sector_heatmap.html.
 """
 
 import sys
@@ -60,6 +63,8 @@ def aggregate_sectors(
     holdings: dict[str, dict],
     quotes: dict[str, dict],
     sectors: dict[str, dict],
+    split_industries: tuple[str, ...] = (SEMICONDUCTOR_INDUSTRY,),
+    stock_threshold_pct: float | None = None,
 ) -> list[dict]:
     """Group holdings into sectors: total value, portfolio weight, daily change.
 
@@ -68,15 +73,20 @@ def aggregate_sectors(
     sectors:  {symbol: {"sector": str, "industry": str|None}}
 
     Only positions with quantity > 0 and a known price count. Symbols without
-    a sector fall into "Unknown". Any sector holding semiconductor-industry
-    stocks is split into child rows "Semiconductors" and "<Sector> (other)"
-    whose parent is that sector. change_pct is the value-weighted average of
-    the stocks' daily changes within the group, or None when no stock has a
+    a sector fall into "Unknown". Any sector holding stocks in one of
+    split_industries is split into child rows — one per split industry
+    present, named after the industry, plus "<Sector> (other)" — whose parent
+    is that sector. When stock_threshold_pct is set, every stock whose
+    portfolio weight reaches it gets its own child row (named by symbol)
+    inside its group, and the group's remaining stocks are lumped into an
+    "Other stocks" row. change_pct is the value-weighted average of the
+    stocks' daily changes within the group, or None when no stock has a
     change value.
 
-    Returns rows as {name, parent, value, weight_pct, change_pct}: top-level
-    sectors (parent=None) sorted by value descending, each immediately
-    followed by its child rows (parent=sector name), also value-descending.
+    Returns rows as {id, name, parent, value, weight_pct, change_pct} where
+    parent is the parent row's id (None for top-level sectors): top-level
+    sectors sorted by value descending, each immediately followed by its
+    child rows, also value-descending, and each child by its stock rows.
     """
     positions = []
     for symbol, holding in holdings.items():
@@ -88,28 +98,30 @@ def aggregate_sectors(
         info = sectors.get(symbol) or {}
         sector = info.get("sector") or UNKNOWN_SECTOR
         industry = info.get("industry") or ""
-        positions.append((sector, industry, value, quote.get("change_pct")))
+        positions.append((symbol, sector, industry, value, quote.get("change_pct")))
 
-    total = sum(value for _, _, value, _ in positions)
+    total = sum(value for _, _, _, value, _ in positions)
     if total <= 0:
         return []
 
-    semi_sectors = {s for s, ind, _, _ in positions if ind == SEMICONDUCTOR_INDUSTRY}
-    leaves: dict[str, dict] = {}  # sectors without a semiconductor split
+    split = set(split_industries)
+    split_sectors = {s for _, s, ind, _, _ in positions if ind in split}
+    leaves: dict[str, dict] = {}  # sectors without an industry split
     children: dict[tuple[str, str], dict] = {}  # (sector, child name) -> agg
-    for sector, industry, value, change in positions:
-        if sector in semi_sectors:
-            child = (
-                SEMICONDUCTOR_INDUSTRY
-                if industry == SEMICONDUCTOR_INDUSTRY
-                else f"{sector} (other)"
-            )
+    members: dict[str, list] = {}  # group id -> [(symbol, value, change)]
+    for symbol, sector, industry, value, change in positions:
+        if sector in split_sectors:
+            child = industry if industry in split else f"{sector} (other)"
+            group_id = f"{sector}/{child}"
             _add_to_agg(children.setdefault((sector, child), _new_agg()), value, change)
         else:
+            group_id = sector
             _add_to_agg(leaves.setdefault(sector, _new_agg()), value, change)
+        members.setdefault(group_id, []).append((symbol, value, change))
 
     def make_row(name: str, parent: str | None, agg: dict) -> dict:
         return {
+            "id": f"{parent}/{name}" if parent else name,
             "name": name,
             "parent": parent,
             "value": agg["value"],
@@ -119,6 +131,33 @@ def aggregate_sectors(
             ),
         }
 
+    def stock_rows(group_id: str) -> list[dict]:
+        """Child rows for a group's stocks at or above the weight threshold."""
+        if stock_threshold_pct is None:
+            return []
+        big = [m for m in members[group_id] if m[1] / total * 100 >= stock_threshold_pct]
+        if not big:
+            return []
+        big_symbols = {symbol for symbol, _, _ in big}
+        rest_agg = _new_agg()
+        for symbol, value, change in members[group_id]:
+            if symbol not in big_symbols:
+                _add_to_agg(rest_agg, value, change)
+        rows = [
+            {
+                "id": f"{group_id}/{symbol}",
+                "name": symbol,
+                "parent": group_id,
+                "value": value,
+                "weight_pct": value / total * 100,
+                "change_pct": change,
+            }
+            for symbol, value, change in sorted(big, key=lambda m: m[1], reverse=True)
+        ]
+        if rest_agg["value"] > 0:
+            rows.append(make_row("Other stocks", group_id, rest_agg))
+        return rows
+
     sector_values = {sector: agg["value"] for sector, agg in leaves.items()}
     for (sector, _child), agg in children.items():
         sector_values[sector] = sector_values.get(sector, 0.0) + agg["value"]
@@ -127,6 +166,7 @@ def aggregate_sectors(
     for sector in sorted(sector_values, key=sector_values.get, reverse=True):
         if sector in leaves:
             rows.append(make_row(sector, None, leaves[sector]))
+            rows.extend(stock_rows(sector))
             continue
         parent_agg = _new_agg()
         child_rows = []
@@ -138,7 +178,9 @@ def aggregate_sectors(
             parent_agg["chg_sum"] += agg["chg_sum"]
             child_rows.append(make_row(child, sector, agg))
         rows.append(make_row(sector, None, parent_agg))
-        rows.extend(sorted(child_rows, key=lambda r: r["value"], reverse=True))
+        for child_row in sorted(child_rows, key=lambda r: r["value"], reverse=True):
+            rows.append(child_row)
+            rows.extend(stock_rows(child_row["id"]))
     return rows
 
 
@@ -157,7 +199,7 @@ def build_heatmap_html(rows: list[dict], generated_at: str) -> str:
     fig = go.Figure(
         go.Treemap(
             ids=[
-                f"{r['parent']}/{r['name']}" if r["parent"] else r["name"]
+                r.get("id") or (f"{r['parent']}/{r['name']}" if r["parent"] else r["name"])
                 for r in rows
             ],
             labels=[r["name"] for r in rows],
@@ -243,7 +285,13 @@ def generate_sector_heatmap(
     finally:
         conn.close()
 
-    rows = aggregate_sectors(holdings, quotes, sectors)
+    split_industries = tuple(
+        settings.get("heatmap_split_industries") or [SEMICONDUCTOR_INDUSTRY]
+    )
+    stock_threshold_pct = settings.get("heatmap_stock_threshold_pct", 5.0)
+    rows = aggregate_sectors(
+        holdings, quotes, sectors, split_industries, stock_threshold_pct
+    )
     if not rows:
         print(f"{timestamp} No priced positions; heatmap not generated")
         return None
