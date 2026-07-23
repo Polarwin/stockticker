@@ -15,7 +15,7 @@
   "web_port": 8010,
   "earnings_watch_enabled": true,
   "earnings_watch_interval_minutes": 10,
-  "earnings_watch_duration_minutes": 120,
+  "earnings_watch_duration_minutes": 180,
   "premarket_report_enabled": true,
   "premarket_check_time": "08:30",
   "premarket_move_threshold_pct": 2.0,

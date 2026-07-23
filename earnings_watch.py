@@ -1,9 +1,12 @@
-"""Post-earnings watch: 10-minute price + news updates for ~2h after release.
+"""Post-earnings watch: 10-minute price + news updates for ~3h after release.
 
 On a watchlist symbol's earnings day (dates come from the DB `earnings`
 table, refreshed daily from the same yfinance calendar as the earnings
 reminder), detects the actual report release by watching for a new quarter
-in the earnings history, then sends a Telegram message every
+in the yfinance earnings history, falling back to the SEC EDGAR filing
+feed (8-K Item 2.02, or 6-K for foreign issuers) which publishes minutes
+after release while yfinance lags by hours. Detection then triggers a
+Telegram message every
 `earnings_watch_interval_minutes` for `earnings_watch_duration_minutes`.
 Each message carries the live price (extended hours included, same source as
 the web UI) plus freshly published Yahoo Finance news; items mentioning
@@ -19,6 +22,7 @@ import sys
 from datetime import datetime, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import requests
 import yfinance as yf
 
 from db import (
@@ -37,7 +41,7 @@ from ticker import fetch_live_quotes, format_price_line
 GUIDANCE_KEYWORDS = ("guidance", "outlook", "forecast")
 # Poll window in market-local time; covers both BMO and AMC releases.
 POLL_START = dt_time(6, 0)
-POLL_END = dt_time(20, 0)
+POLL_END = dt_time(21, 0)
 # How far back to collect news when the release is first detected.
 NEWS_LOOKBACK = timedelta(hours=12)
 
@@ -60,6 +64,66 @@ def fetch_latest_quarter(symbol: str) -> str | None:
     if hasattr(quarter, "date"):
         quarter = quarter.date()
     return quarter.isoformat()
+
+
+EDGAR_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+EDGAR_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+DEFAULT_EDGAR_USER_AGENT = "stockticker/1.0 admin@example.com"
+
+# Symbol -> zero-padded CIK map, cached for the process lifetime.
+_cik_map: dict[str, str] | None = None
+
+
+def _edgar_get(url: str, settings: dict) -> dict:
+    """GET an EDGAR JSON endpoint with the required User-Agent header."""
+    user_agent = settings.get("edgar_user_agent") or DEFAULT_EDGAR_USER_AGENT
+    response = requests.get(url, headers={"User-Agent": user_agent}, timeout=20)
+    response.raise_for_status()
+    return response.json()
+
+
+def _cik_for(symbol: str, settings: dict) -> str | None:
+    """Resolve a ticker to its zero-padded EDGAR CIK, or None if unknown."""
+    global _cik_map
+    if _cik_map is None:
+        data = _edgar_get(EDGAR_TICKERS_URL, settings)
+        _cik_map = {
+            entry["ticker"].upper(): str(entry["cik_str"]).zfill(10)
+            for entry in data.values()
+        }
+    return _cik_map.get(symbol.upper())
+
+
+def edgar_release_filed(symbol: str, filing_date: str, settings: dict) -> bool:
+    """True if EDGAR shows an earnings-release filing on `filing_date`.
+
+    US issuers file an 8-K with Item 2.02 (results of operations) on release
+    day; foreign private issuers file a 6-K instead. Returns False for
+    symbols with no CIK mapping. Raises ValueError with a per-symbol
+    message on fetch failure.
+    """
+    try:
+        cik = _cik_for(symbol, settings)
+        if cik is None:
+            return False
+        data = _edgar_get(EDGAR_SUBMISSIONS_URL.format(cik=cik), settings)
+    except requests.RequestException as exc:
+        raise ValueError(f"{symbol}: EDGAR fetch failed ({exc})")
+
+    recent = data.get("filings", {}).get("recent", {})
+    forms = recent.get("form", [])
+    dates = recent.get("filingDate", [])
+    items = recent.get("items", [])
+    for form, date, item_list in zip(forms, dates, items):
+        if date < filing_date:  # recent filings are newest-first
+            break
+        if date != filing_date:
+            continue
+        if form == "8-K" and "2.02" in item_list:
+            return True
+        if form == "6-K":
+            return True
+    return False
 
 
 def fetch_news(symbol: str) -> list[dict]:
@@ -221,24 +285,41 @@ def run_watch_tick(settings: dict, test: bool = False) -> list[str]:
                     current = fetch_latest_quarter(symbol)
                 except ValueError as exc:
                     print(f"Warning: {exc}", file=sys.stderr)
-                    continue
-                if current is None:
-                    continue
-                if state["baseline_quarter"] is None:
+                    current = None
+                if state["baseline_quarter"] is None and current is not None:
                     # No usable baseline (seeding found nothing): reseed.
                     if not test:
                         upsert_watch_state(conn, symbol, today, current, None, None)
-                    continue
-                if current <= state["baseline_quarter"]:
+
+                detected: str | None = None
+                if (
+                    current is not None
+                    and state["baseline_quarter"] is not None
+                    and current > state["baseline_quarter"]
+                ):
+                    # A newer quarter appeared: the report is out.
+                    detected = current
+                if detected is None:
+                    # yfinance lags real releases by hours; fall back to
+                    # EDGAR, where the 8-K/6-K appears minutes after release.
+                    try:
+                        if edgar_release_filed(symbol, today, settings):
+                            detected = f"8-K/6-K filed {today}"
+                    except ValueError as exc:
+                        print(f"Warning: {exc}", file=sys.stderr)
+                if detected is None:
                     continue
 
-                # A newer quarter appeared: the report is out.
-                print(f"{timestamp} {symbol}: earnings release detected ({current})")
+                print(f"{timestamp} {symbol}: earnings release detected ({detected})")
                 report = None
-                try:
-                    report = fetch_earnings_report(symbol)
-                except ValueError as exc:
-                    print(f"Warning: {exc}", file=sys.stderr)
+                if detected == current:
+                    # Only a yfinance-based detection means its report data
+                    # is fresh; on EDGAR detection it still shows the old
+                    # quarter, so skip the stale report body.
+                    try:
+                        report = fetch_earnings_report(symbol)
+                    except ValueError as exc:
+                        print(f"Warning: {exc}", file=sys.stderr)
                 quote = fetch_live_quotes([symbol]).get(symbol)
                 news = _fresh_news(conn, symbol, now - NEWS_LOOKBACK)
                 messages.append(format_watch_message(symbol, quote, news, 0, report))
