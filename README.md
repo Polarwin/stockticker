@@ -121,7 +121,12 @@ python main.py --premarket-report --include-fundamentals   # append score lines
 - **Data caveats** — yfinance provides ~5 quarters of quarterly statements and
   ~4 years of annuals, so true 5-year CAGRs and the 20-snapshot history
   percentiles build up as daily snapshots accumulate; guidance fields are
-  usually N/A (no reliable free source).
+  usually N/A (no reliable free source). ADRs (TSM, NOK, ASML, BABA, PDD,
+  VALE…) report statements in their home currency: statement money values
+  are FX-converted to the listing currency at the current rate before any
+  ratio math, and per-share figures use ADR-equivalent share counts.
+  Indexes/ETFs (`^VIX`, SPY, QQQ) are auto-skipped via yfinance `quoteType`
+  and cached in `data/non_equity.json` (delete the file to re-detect).
 
 ## Other commands
 

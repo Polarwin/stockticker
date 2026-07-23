@@ -10,6 +10,17 @@ from datetime import date, datetime, timedelta
 
 import yfinance as yf
 
+from fundamentals import fetcher
+
+
+def _equity_only(watchlist: list[str]) -> list[str]:
+    """Drop known non-equity symbols ('^' indexes, cached ETFs) silently."""
+    cached = fetcher.load_non_equity()
+    return [
+        t for t in watchlist
+        if not fetcher.is_non_equity_symbol(t) and t not in cached
+    ]
+
 
 def _as_date(value) -> date | None:
     """Normalize a datetime/date-like value to a date, None if not possible."""
@@ -85,7 +96,7 @@ def tickers_with_earnings_today(
     if today is None:
         today = date.today()
     matches = []
-    for ticker in watchlist:
+    for ticker in _equity_only(watchlist):
         try:
             entries = _earnings_entries(ticker)
         except ValueError as exc:
@@ -105,7 +116,7 @@ def next_earnings(watchlist: list[str], days: int = 30) -> list[dict]:
     today = date.today()
     horizon = today + timedelta(days=days)
     upcoming = []
-    for ticker in watchlist:
+    for ticker in _equity_only(watchlist):
         try:
             entries = _earnings_entries(ticker)
         except ValueError as exc:

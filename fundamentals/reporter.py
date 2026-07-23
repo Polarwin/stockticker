@@ -74,17 +74,37 @@ def update_ticker(
     """Fetch, compute, and store all fundamentals data for one ticker.
 
     Writes profile/financials/earnings/moat/valuation/DCF/history/peer
-    rows (the caller commits). Returns the flat result dict. ValueError
-    from the fetch layer propagates so batch callers can warn-and-continue.
+    rows (the caller commits). Statement money values are FX-converted to
+    the listing currency for ADRs. Returns the flat result dict.
+    ValueError from the fetch layer propagates so batch callers can
+    warn-and-continue.
     """
     if watchlist is None:
         watchlist = []
     if risk_free_rate is None:
         risk_free_rate = fetcher.fetch_risk_free_rate()
 
+    # Indexes/ETFs have no company fundamentals: skip cached ones without
+    # a network call, detect new ones via quoteType and cache them.
+    if fetcher.is_non_equity_symbol(ticker) or ticker in fetcher.load_non_equity():
+        raise ValueError(f"{ticker}: skipped (known non-equity symbol)")
     profile = fetcher.fetch_profile(ticker)
+    quote_type = (profile.get("quote_type") or "").upper()
+    if quote_type in fetcher.NON_EQUITY_TYPES:
+        fetcher.record_non_equity(ticker, quote_type)
+        raise ValueError(f"{ticker}: skipped (non-equity quoteType {quote_type})")
+
     price = fetcher.fetch_price(ticker)
     fin_rows = fetcher.fetch_financials(ticker)
+    # ADRs: statements in local currency, price/market cap in the listing
+    # currency — convert statement money values so ratios are meaningful.
+    # Per-share math downstream uses profile (ADR-equivalent) shares.
+    fin_ccy = profile.get("financial_currency")
+    price_ccy = profile.get("currency")
+    if fin_ccy and price_ccy and fin_ccy != price_ccy:
+        fin_rows = fetcher.apply_fx_rate(
+            fin_rows, fetcher.fetch_fx_rate(fin_ccy, price_ccy)
+        )
     earnings_rows = fetcher.fetch_earnings(ticker)
     database.upsert_company_profile(conn, profile)
     database.upsert_quarterly_financials(conn, fin_rows)
@@ -706,12 +726,41 @@ def _earnings_section(earnings_calendar: list[dict] | None) -> str:
     )
 
 
+def _cheapness_key(result: dict) -> tuple[int, float, float, str]:
+    """Sort key: cheapest -> most expensive.
+
+    Primary: percentile_vs_sector (0 = cheapest among sector peers), which
+    is meaningful immediately. Secondary: mean valuation percentile vs own
+    history — degenerate (all 0/100) until snapshots accumulate, so it only
+    breaks sector ties. Tickers with neither sort last, then by ticker.
+    """
+    percentiles = result.get("history_percentiles") or {}
+    history_vals = [
+        percentiles[k] for k in RATIO_KEYS if percentiles.get(k) is not None
+    ]
+    history_avg = (
+        sum(history_vals) / len(history_vals) if history_vals else float("inf")
+    )
+    sector = result.get("sector_percentile")
+    return (
+        0 if sector is not None or history_vals else 1,
+        sector if sector is not None else float("inf"),
+        history_avg,
+        result.get("ticker", ""),
+    )
+
+
 def render_dashboard(
     results: list[dict], earnings_calendar: list[dict] | None = None
 ) -> str:
-    """Render the full fundamentals dashboard as self-contained dark HTML."""
+    """Render the full fundamentals dashboard as self-contained dark HTML.
+
+    Stock cards are sorted cheapest -> most expensive: percentile vs
+    sector peers first, percentile vs own history as tie-breaker.
+    """
     generated = datetime.now().strftime("%a %b %d, %H:%M")
-    cards = "".join(_stock_card(r) for r in results) or (
+    ordered = sorted(results, key=_cheapness_key)
+    cards = "".join(_stock_card(r) for r in ordered) or (
         '<section class="card"><p class="neutral">No fundamentals data yet — '
         "run --update-fundamentals first.</p></section>"
     )
@@ -727,6 +776,7 @@ def render_dashboard(
 <div class="container">
 <h1>Fundamental Dashboard</h1>
 <p class="meta">Generated {html.escape(generated)} &middot; yfinance data &middot;
+sorted cheapest &rarr; most expensive (percentile vs sector peers, then vs own history) &middot;
 DCF: 5yr FCF projection, terminal growth 2.5%, WACC = risk-free + beta x 5.5%</p>
 
 {_overview_section(results)}

@@ -6,12 +6,50 @@ per symbol (fetch_risk_free_rate is the exception: it silently falls
 back to a default rate). Never pass threads=True to yfinance.
 """
 
+import json
 import math
 from datetime import date
+from pathlib import Path
 
 import yfinance as yf
 
 DEFAULT_RISK_FREE_RATE = 0.045
+
+# quoteType values (from yfinance .info) that have no company fundamentals.
+NON_EQUITY_TYPES = frozenset(
+    {"ETF", "INDEX", "MUTUALFUND", "CURRENCY", "CRYPTOCURRENCY"}
+)
+# Symbols confirmed non-equity are cached here so batch runs (earnings
+# checker, monthly refresh) skip them without a network call. Delete the
+# file to force re-detection.
+NON_EQUITY_CACHE = Path(__file__).resolve().parent.parent / "data" / "non_equity.json"
+
+
+def is_non_equity_symbol(ticker: str) -> bool:
+    """Cheap pre-check: '^'-prefixed symbols are indexes by convention."""
+    return ticker.startswith("^")
+
+
+def load_non_equity(path: Path = NON_EQUITY_CACHE) -> set[str]:
+    """Load the cached set of known non-equity symbols ({} if missing)."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return set()
+    return set(data) if isinstance(data, list) else set(data.keys())
+
+
+def record_non_equity(ticker: str, quote_type: str, path: Path = NON_EQUITY_CACHE) -> None:
+    """Add a symbol to the non-equity cache {ticker: quote_type}."""
+    try:
+        data = json.loads(Path(path).read_text())
+        if not isinstance(data, dict):
+            data = {t: "" for t in data}
+    except (OSError, ValueError):
+        data = {}
+    data[ticker] = quote_type
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(data, indent=1, sort_keys=True))
 
 
 def _float_or_none(value) -> float | None:
@@ -100,7 +138,57 @@ def fetch_profile(ticker: str) -> dict:
         "dividend_rate": _float_or_none(info.get("dividendRate")),
         "shares_outstanding": shares,
         "current_price": price,
+        "quote_type": info.get("quoteType"),
+        "currency": info.get("currency"),
+        "financial_currency": info.get("financialCurrency"),
     }
+
+
+# Row keys holding money amounts (statement currency) — converted by
+# apply_fx_rate for ADRs. shares_outstanding is a count, never converted.
+MONETARY_KEYS = frozenset({
+    "revenue", "gross_profit", "operating_income", "net_income", "eps",
+    "total_assets", "total_liabilities", "shareholders_equity", "total_debt",
+    "cash_and_equivalents", "operating_cash_flow", "free_cash_flow",
+    "capital_expenditure", "depreciation_amortization", "interest_expense",
+    "current_assets", "current_liabilities",
+})
+
+
+def apply_fx_rate(rows: list[dict], rate: float) -> list[dict]:
+    """Multiply all monetary fields of financial rows by an FX rate.
+
+    Used for ADRs whose statements are reported in a different currency
+    than the listing price (e.g. TSM: TWD statements, USD price), so that
+    totals-based ratios against a USD market cap are meaningful. The same
+    rate applies to per-share values (eps), keeping ratios internally
+    consistent. Row dicts are copied, not mutated.
+    """
+    if rate == 1.0:
+        return rows
+    converted = []
+    for row in rows:
+        new_row = dict(row)
+        for key in MONETARY_KEYS:
+            if new_row.get(key) is not None:
+                new_row[key] = new_row[key] * rate
+        converted.append(new_row)
+    return converted
+
+
+def fetch_fx_rate(from_currency: str, to_currency: str) -> float:
+    """Latest FX close for from->to via yfinance (e.g. TWDUSD=X)."""
+    pair = f"{from_currency}{to_currency}=X"
+    try:
+        history = yf.Ticker(pair).history(period="5d")
+    except Exception as exc:
+        raise ValueError(f"FX rate {pair} fetch failed ({exc})")
+    if history is None or history.empty:
+        raise ValueError(f"FX rate {pair}: no data")
+    rate = _float_or_none(history["Close"].iloc[-1])
+    if rate is None or rate <= 0:
+        raise ValueError(f"FX rate {pair}: invalid value")
+    return rate
 
 
 def _build_rows(ticker, income, balance, cashflow, report_type) -> list[dict]:

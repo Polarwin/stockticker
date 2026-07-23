@@ -699,6 +699,38 @@ reports, earnings-day Telegram alerts, and CLI wiring.
 
 ---
 
+## 37. Fundamentals Follow-ups: Web Route, Deep Earnings, Full Watchlist, Sort, ADR FX
+
+**Date:** 2026-07-23
+
+**Asked:** Serve the dashboard in the web UI; download more historical earnings;
+cover the whole watchlist except indexes/ETFs; sort cards cheapest → most
+expensive; fix ADR currency mismatch (TSM/BABA/PDD/VALE + Nokia).
+
+**Did:**
+
+- `web.py`: `/fundamentals` route serving `fundamental_dashboard.html` (like
+  `/premarket`, not regenerated on request) + 💰 header link in `static/index.html`.
+- `fetcher.fetch_earnings`: `get_earnings_dates(limit=100)` instead of the
+  `.earnings_dates` property (~12 rows) — ~100 quarters/ticker, back to 2001.
+- Non-equity skip: `fetcher.fetch_profile` returns `quote_type`; `update_ticker`
+  raises a skip for `^`-symbols and yfinance quoteTypes in
+  `NON_EQUITY_TYPES` (ETF/INDEX/…), caching them in `data/non_equity.json`;
+  `earnings_tracker` filters cached/index symbols silently (no more SPY/QQQ/
+  ^VIX 404 warnings in the nightly `--check-earnings` cron).
+- Full watchlist loaded: 38/38 stocks scored; dashboard ~206 KB.
+- Card sort: `_cheapness_key` — percentile vs sector peers first (works on day
+  one), percentile vs own history as tie-breaker (degenerate until snapshots
+  accumulate), no-data tickers last.
+- ADR FX fix: `fetcher.apply_fx_rate` converts all monetary statement fields
+  (never `shares_outstanding`) via `fetch_fx_rate` (`TWDUSD=X`-style pairs)
+  when `financialCurrency` ≠ `currency`; per-share math uses profile
+  (ADR-equivalent) shares. Purged the 6 polluted `historical_valuation`
+  snapshots and re-updated: TSM DCF upside +890% → −69%, BABA → −6%.
+- Tests: +9 (non-equity cache, FX conversion) — 146 passed.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
