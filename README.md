@@ -80,6 +80,49 @@ them everything still works on yfinance. The "unusual volume" flag needs a
 baseline that accumulates in the `options_volume` DB table (~a week of daily
 snapshots); until then only the put/call ratio is reported.
 
+## Fundamentals
+
+The technical confluence score tells you **when** to trade; the fundamental
+score tells you **what** to own. The `fundamentals/` package fetches company
+financials from yfinance into a local SQLite database (`data/fundamentals.db`),
+then computes valuation ratios, a moat score, a DCF valuation, peer
+comparisons, and a composite 0–100 fundamental score per ticker.
+
+```
+python main.py --update-fundamentals --ticker AAPL   # fetch + store one ticker
+python main.py --update-fundamentals --all           # whole watchlist
+python main.py --fundamental-dashboard               # fundamental_dashboard.html (+ reports/)
+python main.py --fundamental-report --ticker AAPL    # console report + JSON files in reports/
+python main.py --dcf-valuation --ticker AAPL         # DCF breakdown + 5x5 sensitivity grid
+python main.py --moat-score --ticker AAPL            # moat score + component breakdown
+python main.py --peer-comparison --ticker AAPL       # stored peer table
+python main.py --valuation-history --ticker AAPL --years 5
+python main.py --check-earnings                      # Telegram alert for today's reporters
+python main.py --premarket-report --include-fundamentals   # append score lines
+# Cron: weekday evening earnings-day alerts
+# 0 19 * * 1-5 cd ~/Projects/stockticker && bin/python main.py --check-earnings
+```
+
+### How to read it
+
+- **Moat score (0–100)** — five components: Pricing Power (gross margin,
+  25 pts), Capital Efficiency (ROIC, 25), Profitability (ROE, 20), Growth
+  Consistency (5yr revenue CAGR, 15), Financial Strength (debt/equity, 15).
+  Missing components are rescaled over what's available. Ratings:
+  ≥ 80 Wide Moat, ≥ 60 Narrow, ≥ 40 Weak, else No Moat.
+- **DCF valuation** — 5-year FCF-per-share projection (growth = 5yr revenue
+  CAGR × 0.8, capped at 25%, floored at −10%), terminal growth 2.5%, discount
+  rate = risk-free (^TNX) + beta × 5.5% clamped to [3.5%, 20%]. Margin-of-
+  safety bands: > 30% Strong Buy, > 15% Buy, > 0% Fair Value, > −15% Slightly
+  Overvalued, else Overvalued.
+- **Fundamental score (0–100)** — valuation percentiles vs own history
+  (30 pts), moat (25), 3yr revenue growth (20), balance-sheet stability (15),
+  earnings beat streak (10).
+- **Data caveats** — yfinance provides ~5 quarters of quarterly statements and
+  ~4 years of annuals, so true 5-year CAGRs and the 20-snapshot history
+  percentiles build up as daily snapshots accumulate; guidance fields are
+  usually N/A (no reliable free source).
+
 ## Other commands
 
 - `python main.py --premarket-report` — premarket briefing (Telegram + `premarket_report.html`); `--ticker SYM` for a single-stock deep dive

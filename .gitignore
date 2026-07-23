@@ -28,6 +28,13 @@ indicators_table.html
 # Generated premarket report
 premarket_report.html
 
+# Generated fundamental dashboard
+fundamental_dashboard.html
+
+# Fundamentals reports and database
+reports/
+data/
+
 # Runtime logs
 *.log
 

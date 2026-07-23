@@ -663,6 +663,42 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 36. Fundamentals Package: Scores, Moat, DCF, Dashboard, Alerts
+
+**Date:** 2026-07-23
+
+**Asked:** Add a fundamental-analysis layer: yfinance-backed SQLite storage of
+profiles/financials/earnings, valuation ratios, a moat score, a DCF valuator,
+peer comparison, a composite fundamental score, an HTML dashboard, JSON
+reports, earnings-day Telegram alerts, and CLI wiring.
+
+**Done:**
+- `fundamentals/` package (9 modules): `database` (8 tables in
+  `data/fundamentals.db`, upsert/get helpers), `fetcher` (yfinance profiles,
+  income/balance/cashflow merges, earnings dates, ^TNX risk-free rate),
+  `calculator` (TTM + valuation ratios), `moat_scorer` (CAGRs, margins, ROIC,
+  5-component 0-100 rubric with missing-component rescaling, Wide/Narrow/Weak/
+  No ratings), `dcf_valuator` (5yr FCF projection, terminal growth 2.5%,
+  WACC = risk-free + beta x 5.5%, 5x5 sensitivity grid), `scorer` (composite
+  0-100: valuation percentiles 30 / moat 25 / growth 20 / stability 15 /
+  earnings quality 10), `history` (daily snapshots + own-history percentiles),
+  `peers` (curated GICS peer lists, sector medians, premium/discount),
+  `earnings_tracker` (today/upcoming earnings via yfinance calendar),
+  `reporter` (orchestration, dashboard, JSON, Telegram, premarket one-liners).
+- CLI: `--update-fundamentals --ticker X|--all`, `--fundamental-dashboard`,
+  `--fundamental-report --ticker X` (+ JSON in `reports/`), `--dcf-valuation`,
+  `--moat-score`, `--peer-comparison`, `--valuation-history --years N`,
+  `--check-earnings`, and `--premarket-report --include-fundamentals`;
+  `fundamentals_db_path` setting added (project-relative like `db_path`).
+- Dashboard (`fundamental_dashboard.html` + `reports/` copy): GitHub-dark
+  palette matching the premarket report — portfolio overview, per-stock cards
+  (ratios, percentile bars, moat breakdown, DCF box, surprise dots), sortable
+  peer table, inline-SVG P/E history chart with sector median and 25-75% band,
+  collapsible DCF sensitivity grids, earnings calendar.
+- Tests: +66 (55 core + 11 reporter), all synthetic/no-network — 137 passed.
+
+---
+
 ## Final Project State
 
 **Tracked files:**

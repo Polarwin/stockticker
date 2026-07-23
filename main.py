@@ -41,6 +41,7 @@ DEFAULT_SETTINGS = {
     "premarket_report_enabled": True,
     "premarket_check_time": "08:45",
     "premarket_move_threshold_pct": 2.0,
+    "fundamentals_db_path": "data/fundamentals.db",
 }
 
 
@@ -124,13 +125,253 @@ def do_signal_check(settings: dict, test: bool) -> None:
         send_telegram("📊 Indicator Alerts\n" + "\n".join(lines))
 
 
-def do_premarket_report(settings: dict, test: bool, ticker: str | None = None) -> None:
+def _append_fundamental_lines(
+    settings: dict, message: str, ticker: str | None = None
+) -> str:
+    """Append compact 'Fund: .. | Moat: .. | DCF: ..' lines to a report message.
+
+    Silent no-op when the fundamentals DB is missing or no mentioned
+    ticker has a stored score.
+    """
+    try:
+        from fundamentals import database, reporter
+
+        db_path = reporter.resolve_fundamentals_db_path(settings)
+        if not Path(db_path).exists():
+            return message
+        conn = database.init_db(db_path)
+        try:
+            tickers = [ticker.strip().upper()] if ticker else None
+            liners = reporter.fundamental_one_liners(conn, tickers)
+        finally:
+            conn.close()
+    except Exception:
+        return message
+    lines = [line for symbol, line in liners.items() if symbol in message]
+    if not lines:
+        return message
+    return message + "\n" + "\n".join(f"  {line}" for line in lines)
+
+
+def do_premarket_report(
+    settings: dict,
+    test: bool,
+    ticker: str | None = None,
+    include_fundamentals: bool = False,
+) -> None:
     """Build the pre-market portfolio report; send one Telegram message."""
     message = build_report(settings, ticker=ticker)
+    if include_fundamentals:
+        message = _append_fundamental_lines(settings, message, ticker)
     if not test:
         send_telegram(message)
     else:
         print(message)
+
+
+def do_update_fundamentals(
+    settings: dict, test: bool, ticker: str | None, all_tickers: bool
+) -> None:
+    """Fetch + compute + store fundamentals for one ticker or the watchlist."""
+    from fundamentals import database, reporter
+    from ticker import load_watchlist
+
+    tickers = load_watchlist() if all_tickers else [ticker.strip().upper()]
+    conn = database.init_db(reporter.resolve_fundamentals_db_path(settings))
+    try:
+        reporter.update_all(conn, tickers, test=test)
+    finally:
+        conn.close()
+
+
+def do_fundamental_dashboard(settings: dict, test: bool) -> None:
+    """Render the fundamental dashboard from stored data."""
+    from fundamentals import reporter
+
+    reporter.generate_dashboard(settings, test=test)
+
+
+def do_peer_comparison(settings: dict, ticker: str) -> None:
+    """Print the stored peer comparison for a ticker (no fetching)."""
+    from fundamentals import database, reporter
+
+    ticker = ticker.strip().upper()
+    conn = database.init_db(reporter.resolve_fundamentals_db_path(settings))
+    try:
+        rows = database.get_peer_comparison(conn, ticker)
+    finally:
+        conn.close()
+    if not rows:
+        print(f"{ticker}: no peer data — run --update-fundamentals first")
+        return
+
+    def fmt(value) -> str:
+        return "N/A" if value is None else f"{value:.2f}"
+
+    print(f"Peer comparison — {ticker} (premium/discount vs peer median)")
+    by_metric: dict[str, list[dict]] = {}
+    for row in rows:
+        by_metric.setdefault(row["metric"], []).append(row)
+    for metric, metric_rows in by_metric.items():
+        own = metric_rows[0]["ticker_value"]
+        median = metric_rows[0]["sector_median"]
+        premium = metric_rows[0]["premium_discount_pct"]
+        premium_str = "N/A" if premium is None else f"{premium:+.1f}%"
+        print(f"  {metric}: {fmt(own)} (median {fmt(median)}, {premium_str})")
+        for row in metric_rows:
+            print(f"    {row['peer_ticker']}: {fmt(row['peer_value'])}")
+
+
+def do_valuation_history(settings: dict, ticker: str, years: int) -> None:
+    """Print the stored historical valuation series + percentile summary."""
+    from datetime import date, timedelta
+
+    from fundamentals import database, reporter
+
+    ticker = ticker.strip().upper()
+    cutoff = (date.today() - timedelta(days=365 * years)).isoformat()
+    conn = database.init_db(reporter.resolve_fundamentals_db_path(settings))
+    try:
+        rows = [
+            row
+            for row in database.get_historical_valuation(conn, ticker)
+            if row["date"] >= cutoff
+        ]
+        results = reporter.load_results(conn, [ticker])
+    finally:
+        conn.close()
+    if not rows:
+        print(f"{ticker}: no valuation history — run --update-fundamentals first")
+        return
+
+    def fmt(value) -> str:
+        return "N/A" if value is None else f"{value:.1f}"
+
+    print(f"Valuation history — {ticker} (last {years}y, {len(rows)} snapshots)")
+    print("  date        P/E    P/B    P/S    P/FCF  EV/EBITDA  sectorPE  %ile")
+    for row in reversed(rows):  # oldest first
+        pct = row.get("percentile_vs_history")
+        print(
+            f"  {row['date']}  {fmt(row.get('pe_ratio')):>6} "
+            f"{fmt(row.get('pb_ratio')):>6} {fmt(row.get('ps_ratio')):>6} "
+            f"{fmt(row.get('p_fcf_ratio')):>6} {fmt(row.get('ev_ebitda')):>9} "
+            f"{fmt(row.get('sector_median_pe')):>8} "
+            f"{('N/A' if pct is None else f'{pct:.0f}%'):>5}"
+        )
+    if results:
+        result = results[0]
+        print("Percentiles vs own history (last 20 snapshots):")
+        for key, pct in (result.get("history_percentiles") or {}).items():
+            print(f"  {key}: {'N/A' if pct is None else f'{pct:.0f}%'}")
+        sector_pct = result.get("sector_percentile")
+        print(f"  vs sector (P/E): {'N/A' if sector_pct is None else f'{sector_pct:.0f}%'}")
+
+
+def do_dcf_valuation(settings: dict, test: bool, ticker: str) -> None:
+    """Print the DCF breakdown + sensitivity grid (refresh unless stored today)."""
+    from datetime import date
+
+    from fundamentals import database, reporter
+
+    ticker = ticker.strip().upper()
+    conn = database.init_db(reporter.resolve_fundamentals_db_path(settings))
+    try:
+        latest = database.get_latest_dcf_valuation(conn, ticker)
+        if latest and latest.get("valuation_date") == date.today().isoformat():
+            print(f"(using today's stored DCF for {ticker})")
+            loaded = reporter.load_results(conn, [ticker])
+            result = loaded[0] if loaded else None
+        else:
+            result = reporter.update_ticker(conn, ticker, watchlist=[ticker])
+            conn.commit()
+    finally:
+        conn.close()
+
+    if result is None or not result.get("dcf"):
+        print(f"{ticker}: no computable DCF (negative or missing FCF)")
+        return
+    dcf = result["dcf"]
+
+    def fmt(value, digits=2) -> str:
+        return "N/A" if value is None else f"{value:.{digits}f}"
+
+    print(f"DCF valuation — {ticker}")
+    print(f"  Current price:        {fmt(dcf.get('current_price'))}")
+    print(f"  FCF/share (TTM):      {fmt(dcf.get('fcf_per_share_ttm'))}")
+    print(f"  Growth (5yr):         {fmt(dcf.get('fcf_growth_rate_5yr'), 3)}")
+    print(f"  Discount rate:        {fmt(dcf.get('discount_rate'), 3)}")
+    print(f"  Terminal growth:      {fmt(dcf.get('fcf_growth_rate_terminal'), 3)}")
+    print(f"  Projected FCF (5yr):  {fmt(dcf.get('projected_fcf_5yr'))}")
+    print(f"  Terminal value:       {fmt(dcf.get('terminal_value'))}")
+    print(f"  Intrinsic/share:      {fmt(dcf.get('intrinsic_value_per_share'))}")
+    upside = dcf.get("upside_downside_pct")
+    print(f"  Upside/downside:      {'N/A' if upside is None else f'{upside:+.1f}%'}")
+    print(f"  Margin of safety:     {dcf.get('mos_label') or 'N/A'}")
+
+    grid = result.get("sensitivity")
+    if not grid:
+        print("  Sensitivity: N/A")
+        return
+    print("  Sensitivity (intrinsic/share; rows=growth, cols=discount):")
+    discounts = grid["discount_rates"]
+    print("            " + "".join(f"{d * 100:>8.1f}%" for d in discounts))
+    for growth, values in zip(grid["growth_rates"], grid["values"]):
+        cells = "".join(
+            f"{v:>9.1f}" if v is not None else f"{'—':>9}" for v in values
+        )
+        print(f"    {growth * 100:>5.1f}%{cells}")
+
+
+def do_moat_score(settings: dict, ticker: str) -> None:
+    """Print the stored moat score, rating, and component breakdown."""
+    from fundamentals import database, moat_scorer, reporter
+
+    ticker = ticker.strip().upper()
+    conn = database.init_db(reporter.resolve_fundamentals_db_path(settings))
+    try:
+        moat = database.get_latest_moat_metrics(conn, ticker)
+    finally:
+        conn.close()
+    if not moat or moat.get("moat_score") is None:
+        print(f"{ticker}: no moat data — run --update-fundamentals first")
+        return
+    _score, _rating, breakdown = moat_scorer.moat_score(moat)
+    print(f"Moat score — {ticker}: {moat['moat_score']:.0f}/100 "
+          f"({moat.get('moat_rating') or 'N/A'})")
+    for key, (label, max_points) in reporter.MOAT_COMPONENTS.items():
+        points = breakdown.get(key)
+        print(f"  {label}: {'N/A' if points is None else points}/{max_points}")
+
+
+def do_fundamental_report(settings: dict, test: bool, ticker: str) -> None:
+    """Full console fundamental report for one ticker + JSON report files."""
+    from fundamentals import database, reporter
+
+    ticker = ticker.strip().upper()
+    conn = database.init_db(reporter.resolve_fundamentals_db_path(settings))
+    try:
+        result = reporter.update_ticker(conn, ticker, watchlist=[ticker])
+        conn.commit()
+    finally:
+        conn.close()
+    print(
+        reporter.build_telegram_alert(result).replace(
+            f"📊 Fundamental Alert — {ticker} Earnings Today",
+            f"📊 Fundamental Report — {ticker}",
+            1,
+        )
+    )
+    fundamental_path, dcf_path = reporter.write_json_reports(
+        [result], reporter.REPORTS_DIR
+    )
+    print(f"JSON reports written to {fundamental_path} and {dcf_path}")
+
+
+def do_check_earnings(settings: dict, test: bool) -> None:
+    """Send fundamental alerts for watchlist tickers reporting today."""
+    from fundamentals import reporter
+
+    reporter.run_earnings_check(settings, test=test)
 
 
 def main() -> None:
@@ -199,6 +440,62 @@ def main() -> None:
         action="store_true",
         help="Generate the bullish/bearish indicators table (indicators_table.html), then exit.",
     )
+    parser.add_argument(
+        "--update-fundamentals",
+        action="store_true",
+        help="Fetch + store fundamentals for --ticker SYMBOL or --all, then exit.",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Apply --update-fundamentals to the whole watchlist.",
+    )
+    parser.add_argument(
+        "--fundamental-dashboard",
+        action="store_true",
+        help="Render fundamental_dashboard.html from stored data, then exit.",
+    )
+    parser.add_argument(
+        "--peer-comparison",
+        action="store_true",
+        help="Print the stored peer comparison for --ticker SYMBOL, then exit.",
+    )
+    parser.add_argument(
+        "--valuation-history",
+        action="store_true",
+        help="Print the stored valuation history for --ticker SYMBOL, then exit.",
+    )
+    parser.add_argument(
+        "--years",
+        type=int,
+        default=5,
+        help="Look-back window for --valuation-history (default: 5).",
+    )
+    parser.add_argument(
+        "--dcf-valuation",
+        action="store_true",
+        help="Print the DCF breakdown + sensitivity grid for --ticker SYMBOL, then exit.",
+    )
+    parser.add_argument(
+        "--moat-score",
+        action="store_true",
+        help="Print the moat score breakdown for --ticker SYMBOL, then exit.",
+    )
+    parser.add_argument(
+        "--fundamental-report",
+        action="store_true",
+        help="Full console fundamental report for --ticker SYMBOL + JSON files, then exit.",
+    )
+    parser.add_argument(
+        "--check-earnings",
+        action="store_true",
+        help="Send fundamental alerts for watchlist tickers reporting today, then exit.",
+    )
+    parser.add_argument(
+        "--include-fundamentals",
+        action="store_true",
+        help="Append compact fundamental score lines to the pre-market report.",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
@@ -234,8 +531,57 @@ def main() -> None:
         generate_sector_heatmap(settings, test=args.test)
         return
 
+    if args.update_fundamentals:
+        if not args.ticker and not args.all:
+            parser.error("--update-fundamentals requires --ticker SYMBOL or --all")
+        do_update_fundamentals(
+            settings, args.test, ticker=args.ticker, all_tickers=args.all
+        )
+        return
+
+    if args.fundamental_dashboard:
+        do_fundamental_dashboard(settings, args.test)
+        return
+
+    if args.peer_comparison:
+        if not args.ticker:
+            parser.error("--peer-comparison requires --ticker SYMBOL")
+        do_peer_comparison(settings, args.ticker)
+        return
+
+    if args.valuation_history:
+        if not args.ticker:
+            parser.error("--valuation-history requires --ticker SYMBOL")
+        do_valuation_history(settings, args.ticker, args.years)
+        return
+
+    if args.dcf_valuation:
+        if not args.ticker:
+            parser.error("--dcf-valuation requires --ticker SYMBOL")
+        do_dcf_valuation(settings, args.test, args.ticker)
+        return
+
+    if args.moat_score:
+        if not args.ticker:
+            parser.error("--moat-score requires --ticker SYMBOL")
+        do_moat_score(settings, args.ticker)
+        return
+
+    if args.fundamental_report:
+        if not args.ticker:
+            parser.error("--fundamental-report requires --ticker SYMBOL")
+        do_fundamental_report(settings, args.test, args.ticker)
+        return
+
+    if args.check_earnings:
+        do_check_earnings(settings, args.test)
+        return
+
     if args.premarket_report:
-        do_premarket_report(settings, args.test, ticker=args.ticker)
+        do_premarket_report(
+            settings, args.test, ticker=args.ticker,
+            include_fundamentals=args.include_fundamentals,
+        )
         return
 
     if args.indicators_table:
