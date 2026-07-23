@@ -195,14 +195,16 @@ def fetch_financials(ticker: str) -> list[dict]:
 
 
 def fetch_earnings(ticker: str) -> list[dict]:
-    """Fetch earnings history rows from the yfinance .earnings_dates table.
+    """Fetch earnings history rows from yfinance earnings dates.
 
-    surprise_pct is stored as given by yfinance (e.g. 5.2 means +5.2%).
-    Guidance and call_sentiment are None (not reliably available).
-    Rows are returned newest fiscal date first.
+    Uses get_earnings_dates(limit=100) — the .earnings_dates property caps at
+    ~12 rows, while the explicit limit backfills ~20 years of quarters
+    (e.g. AAPL back to 2005). surprise_pct is stored as given by yfinance
+    (e.g. 5.2 means +5.2%). Guidance and call_sentiment are None (not
+    reliably available). Rows are returned newest fiscal date first.
     """
     try:
-        df = yf.Ticker(ticker).earnings_dates
+        df = yf.Ticker(ticker).get_earnings_dates(limit=100)
     except Exception as exc:
         raise ValueError(f"{ticker}: earnings dates fetch failed ({exc})")
     if df is None or df.empty:
