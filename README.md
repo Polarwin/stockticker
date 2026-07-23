@@ -13,10 +13,14 @@ python main.py --indicators-table
 
 Generates `indicators_table.html` — a self-contained, dark-themed page with a
 bullish/bearish confluence score (0–100) per watchlist symbol, computed from
-daily bars (yfinance, falling back to the local database). The same score and
-indicator breakdown also appear in the web UI (`python web.py`) as a
-"Confluence Score" table under the price chart whenever a symbol is selected
-(hidden for symbols with too little history).
+daily bars (yfinance, falling back to the local database). In the web UI
+(`python web.py`) the "Confluence Score" table under the price chart shows the
+same five base rows plus two bonus rows — Candlestick Pattern (±20/±15 by
+tier) and Options Flow put/call ratio (±8/±4) — stacked on the base score and
+clamped to 0-100, matching the premarket report's score exactly (hidden for
+symbols with too little history). The chart itself can overlay Bollinger
+Bands (20, 2) via the "BB (20,2)" toggle, and the header links to the
+premarket report page.
 
 ### How to read it
 
@@ -51,8 +55,34 @@ small average gains can underperform a low win rate with large gains, so the
 low-reliability indicators (MACD, EMA trend) carry small weights and should
 only confirm, never drive a decision alone.
 
+## Premarket report
+
+```
+python main.py --premarket-report             # full portfolio briefing
+python main.py --premarket-report --ticker TSM  # single-stock deep dive
+```
+
+Runs automatically on weekdays at `premarket_check_time` (08:45 ET) from the
+web process, sending a concise Telegram briefing and writing the full report to
+`premarket_report.html` (served at `/premarket`). Covers every holding across
+eight sections: market overview (ES/NQ futures, VIX, 10-year yield, overnight
+headlines), earnings calendar (EPS/revenue estimates, beat history, BMO/AMC
+timing), news sentiment (VADER over the last 24h of headlines), options flow
+(put/call ratio, unusual-volume flags), candlestick reversal patterns
+(engulfing, stars, hammer/shooting star, doji), the confluence score (the
+indicators-table base score plus pattern/sentiment/options bonuses), premarket
+movers, and auto-generated action items.
+
+News headlines come from Finnhub, falling back to Alpha Vantage and then
+yfinance; options chains always come from yfinance. Set `FINNHUB_API_KEY`
+and/or `ALPHAVANTAGE_API_KEY` in `.env` to enable the paid sources — without
+them everything still works on yfinance. The "unusual volume" flag needs a
+baseline that accumulates in the `options_volume` DB table (~a week of daily
+snapshots); until then only the put/call ratio is reported.
+
 ## Other commands
 
+- `python main.py --premarket-report` — premarket briefing (Telegram + `premarket_report.html`); `--ticker SYM` for a single-stock deep dive
 - `python main.py --sector-heatmap` — sector allocation treemap (`sector_heatmap.html`)
 - `python main.py --signals` — MACD/RSI crossover alerts
 - `python main.py --update-db` / `--update-earnings` / `--earnings-reports`
@@ -61,6 +91,7 @@ only confirm, never drive a decision alone.
 ## Tests
 
 ```
+bin/python -m pytest                 # full suite (patterns, premarket report, ...)
 bin/python -m unittest test_indicators_table -v
 bin/python -m unittest test_sector_heatmap -v
 ```

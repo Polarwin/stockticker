@@ -629,6 +629,40 @@ This log records the work done in this CLI session, in chronological order.
 
 ---
 
+## 34. Comprehensive Premarket Report
+
+**Asked:** Expand the premarket report into an 8-section daily briefing — market overview, earnings calendar, news sentiment, options flow, candlestick reversal patterns, confluence score (extended with pattern/sentiment/options bonuses), premarket movers, and auto-generated action items — run weekdays at 08:45 ET, manual trigger `python main.py --premarket-report [--ticker SYM]`, delivered as a concise Telegram message plus a full HTML page. User decisions: Finnhub + Alpha Vantage keys for news/earnings timing (yfinance fallback), holdings only (not the full watchlist), Telegram + HTML output.
+
+**Done:**
+- New `patterns.py`: pure-function candlestick detection over aligned OHLCV lists — Tier 1 (bullish/bearish engulfing, morning/evening star), Tier 2 (hammer, inverted hammer, shooting star; shadow ≥ 2× body, trend-gated via EMA9/21 + 3-day slope), Tier 3 (doji only near the 20-bar high/low). Hits carry tier, reliability, trend context, volume confirmation (bar volume > SMA20), and a Tentative/Confirmed/Expired status the report resolves against the premarket move.
+- New `sentiment.py`: headline chain Finnhub `company-news` → Alpha Vantage `NEWS_SENTIMENT` → yfinance `.news`; VADER (`vaderSentiment` package, installed into the venv) mean-compound score, spec thresholds (≥+0.5 Bullish … ≤−0.5 Bearish) and ±5 score bonus. A rejected key (401/403) is disabled for the rest of the run with one warning.
+- New `options_flow.py`: yfinance option chains (nearest 1–2 expiries) → call/put volume and PCR; spec labels (PCR <0.7 strong bullish … >1.5 strong bearish) and ±8/±4 bonuses. `db.py` gains an `options_volume` table; each run snapshots today's totals and flags "unusual" at >2× the trailing average once ≥5 baseline days exist ("collecting baseline" until then).
+- `premarket_report.py` rewritten: `build_report_data()` assembles the 8 sections (ES=F/NQ=F, ^VIX, ^TNX, top-3 headlines; earnings with EPS/revenue estimates, Finnhub BMO/AMC timing, yfinance "Beat X/4" history; sentiment; options; patterns; score = indicators-table base + bonuses clamped 0-100; movers; action items 🟢/🔴/⚪/📅). `format_telegram()` stays under 4096 chars with line-boundary elision; `render_html()` produces the self-contained dark `premarket_report.html`; `--ticker` switches to a single-stock deep dive (all indicator rows, all patterns, 5 scored headlines, options chain summary). Footer reports the providers actually used.
+- Wiring: `main.py --ticker` arg; `web.py` `/premarket` route (serves the generated file, not regenerated on request because runs snapshot options volume); `settings.json` + `main.py` default `premarket_check_time` → 08:45; `pytest.ini` so bare pytest skips the venv's site-packages.
+- New `test_patterns.py` (16 tests) and `test_premarket_report.py` (16 tests): synthetic-OHLC pattern detection, sentiment/PCR label and bonus boundaries, score clamping, Telegram length cap, ticker filter.
+
+**Key decisions:**
+- Kept the existing 0-100 score scale (the spec's "-100..+100" line contradicts its own label thresholds).
+- Options chains always come from yfinance — neither Finnhub free tier nor Alpha Vantage basic offers usable options volume.
+- The spec's cron `45 8 * * 1-5` is realized by the existing web.py notification loop (weekday-gated at `premarket_check_time`), not a system crontab.
+
+**Verified:** `bin/python -m pytest` 61 passed; `main.py --premarket-report --test` and `--ticker TSM --test` produce all sections with live data; `/premarket` serves the full report (Flask test client, all 8 sections). Note: the FINNHUB_API_KEY / ALPHAVANTAGE_API_KEY values in `.env` were rejected (401) at implementation time — the fallback chain covers this, but the keys need renewing for Finnhub/AV data. (The user replaced the Finnhub key the same day; news, sentiment, market headlines, and earnings BMO/AMC timing all confirmed flowing from Finnhub afterwards.)
+
+---
+
+## 35. Premarket Link, Extended Confluence Panel, Chart Bollinger Bands
+
+**Asked:** Link the premarket report from the main UI; add candlestick patterns and options flow as new rows in the web UI's Confluence Score table; overlay Bollinger Bands on the candlestick chart.
+
+**Done:**
+- `static/index.html`: "🌅 Premarket Report" header link next to the Sector Heatmap link (same CSS class); "BB (20,2)" chart toggle (default checked, persisted like the MA toggles) driving three line series — upper/lower in muted gray-blue, middle fainter and dashed.
+- `web.py /api/prices/<symbol>`: `bb_upper`/`bb_middle`/`bb_lower` arrays computed over the full close history (warm-up, sliced with the MACD/RSI offset), aligned with `dates`.
+- `web.py /api/indicators/<symbol>`: now loads full OHLCV bars and appends "Candlestick Pattern" (weight 20, reliability 0.75/0.50 by tier, points = `pattern_bonus`) and "Options Flow (PCR)" (weight 8, reliability 0.55, points = `options_bonus`) rows — always present, neutral when no data; score via `apply_bonuses(base, patterns, None, pcr)` so the panel score matches the premarket report exactly. The standalone `--indicators-table` page is unchanged.
+- `premarket_report.py`: two pure row builders (`pattern_indicator_row`, `options_indicator_row`) shared by the endpoint.
+- Tests: +10 (row construction incl. fetch-failure neutral, score stacking parity, BB alignment, 7-row endpoint shape with mocked options fetch, null on insufficient history) — 71 passed. Inline JS passes `node --check`.
+
+---
+
 ## Final Project State
 
 **Tracked files:**
@@ -646,18 +680,25 @@ This log records the work done in this CLI session, in chronological order.
 - `install_service.sh`
 - `main.py`
 - `notify.py`
+- `options_flow.py`
+- `patterns.py`
+- `premarket_report.py`
+- `pytest.ini`
 - `SESSION_LOG.md` (this file)
+- `sentiment.py`
 - `settings.json`
 - `static/index.html`
 - `static/symbols.json`
 - `test_indicators_table.py`
+- `test_patterns.py`
+- `test_premarket_report.py`
 - `test_sector_heatmap.py`
 - `ticker.py`
 - `uninstall_service.sh`
 - `watchlist.txt`
 - `web.py`
 
-(`stockticker.db`, `sector_heatmap.html`, and `indicators_table.html` are created at runtime and gitignored.)
+(`stockticker.db`, `sector_heatmap.html`, `indicators_table.html`, and `premarket_report.html` are created at runtime and gitignored.)
 
 **Runtime behavior:**
 - `python main.py --once` runs one ticker round, one earnings check, and one earnings-report check immediately (ignoring the schedule), prints timestamped output, and sends Telegram messages if credentials are configured.
@@ -666,6 +707,7 @@ This log records the work done in this CLI session, in chronological order.
 - `--update-db` updates the local SQLite price database immediately and exits (logs `DB already up to date` when current); `--update-earnings` refreshes only the earnings table; `--signals` checks MACD/RSI crossovers and exits. After the scheduled daily DB update, crossover alerts are checked automatically and sent via Telegram when found.
 - `--sector-heatmap` generates `sector_heatmap.html` — a self-contained Plotly treemap of the portfolio grouped by sector (box size = sector weight, green/red = value-weighted daily change) — and exits. Sectors are cached in the `sectors` DB table; ETFs/unknowns fall into "Unknown". Sectors holding industries in `heatmap_split_industries` split into per-industry sub-boxes; stocks at/above `heatmap_stock_threshold_pct` portfolio weight get their own box. Tests: `bin/python -m unittest test_sector_heatmap`.
 - `--indicators-table` generates `indicators_table.html` — a self-contained dark-themed page scoring every watchlist symbol 0-100 bullish/bearish from five indicators (RSI, Bollinger Bands, MACD, EMA 9/21 trend, volume vs SMA20): each votes bullish/bearish/neutral and contributes ±(weight × reliability), normalized so 50 = balanced. Includes a summary table, per-symbol indicator breakdown with color-coded reliability bars, threshold legend, and a win-rate guide. Daily bars come from yfinance with per-symbol fallback to the local DB; symbols with < 40 bars are skipped. Tests: `bin/python -m unittest test_indicators_table`.
+- `--premarket-report` builds the 8-section premarket briefing (market overview, earnings calendar, news sentiment, options flow, candlestick patterns, extended confluence score, movers, action items) over all holdings: sends a concise Telegram message and writes the full `premarket_report.html` (served at `/premarket`); `--ticker SYM` switches to a single-stock deep dive. Runs automatically on weekdays at `premarket_check_time` (08:45 ET). News via Finnhub → Alpha Vantage → yfinance (VADER scoring), options chains via yfinance with PCR + an unusual-volume baseline accumulating in the `options_volume` table. Tests: `bin/python -m pytest`.
 - `--test` suppresses Telegram; `--days N` overrides the earnings look-ahead window; `--once` runs a ticker round even when `ticker_enabled` is false.
 - `python web.py` serves the web UI on `web_host`:`web_port` (default 127.0.0.1:8010): watchlist management with search, candlestick charts with SMAs, earnings badge and calendar. A background thread in the same process runs all Telegram notifications: daily earnings reminder + earnings-report check at `earnings_check_time`, the post-earnings watch every minute (10-min price + news messages for 2h after a release is detected), and — while the header "Telegram price alerts" toggle is on — a watchlist price round every `ticker_interval_seconds`.
 - All schedule/market/earnings/db/web settings live in `settings.json`; missing file falls back to built-in defaults with a warning. The price-alert toggle is stored in the DB `meta` table.

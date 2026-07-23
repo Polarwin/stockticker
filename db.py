@@ -100,6 +100,17 @@ def init_db(path: Path | str) -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS options_volume (
+            symbol      TEXT NOT NULL,
+            date        TEXT NOT NULL,
+            call_volume INTEGER,
+            put_volume  INTEGER,
+            PRIMARY KEY (symbol, date)
+        )
+        """
+    )
     # Migration for databases created before the industry column existed.
     sector_cols = [r[1] for r in conn.execute("PRAGMA table_info(sectors)")]
     if "industry" not in sector_cols:
@@ -341,3 +352,40 @@ def mark_news_sent(
         """,
         (symbol, news_id, sent_at),
     )
+
+
+def upsert_options_volume(
+    conn: sqlite3.Connection,
+    symbol: str,
+    date: str,
+    call_volume: int,
+    put_volume: int,
+) -> None:
+    """Insert or replace the options-volume snapshot for a symbol/date."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO options_volume
+            (symbol, date, call_volume, put_volume)
+        VALUES (?, ?, ?, ?)
+        """,
+        (symbol, date, call_volume, put_volume),
+    )
+
+
+def get_options_volume_history(
+    conn: sqlite3.Connection, symbol: str, before_date: str, limit: int = 20
+) -> list[tuple[str, int, int]]:
+    """Past (date, call_volume, put_volume) snapshots, newest first.
+
+    Only rows strictly before `before_date` are returned, so a same-day
+    snapshot never contaminates its own baseline.
+    """
+    rows = conn.execute(
+        """
+        SELECT date, call_volume, put_volume FROM options_volume
+        WHERE symbol = ? AND date < ?
+        ORDER BY date DESC LIMIT ?
+        """,
+        (symbol, before_date, limit),
+    ).fetchall()
+    return [(r[0], r[1] or 0, r[2] or 0) for r in rows]

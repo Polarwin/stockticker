@@ -39,7 +39,7 @@ DEFAULT_SETTINGS = {
     "earnings_watch_duration_minutes": 180,
     "edgar_user_agent": "stockticker/1.0 admin@example.com",
     "premarket_report_enabled": True,
-    "premarket_check_time": "08:30",
+    "premarket_check_time": "08:45",
     "premarket_move_threshold_pct": 2.0,
 }
 
@@ -124,9 +124,9 @@ def do_signal_check(settings: dict, test: bool) -> None:
         send_telegram("📊 Indicator Alerts\n" + "\n".join(lines))
 
 
-def do_premarket_report(settings: dict, test: bool) -> None:
+def do_premarket_report(settings: dict, test: bool, ticker: str | None = None) -> None:
     """Build the pre-market portfolio report; send one Telegram message."""
-    message = build_report(settings)
+    message = build_report(settings, ticker=ticker)
     if not test:
         send_telegram(message)
     else:
@@ -189,6 +189,12 @@ def main() -> None:
         help="Send the pre-market portfolio report immediately, then exit.",
     )
     parser.add_argument(
+        "--ticker",
+        default=None,
+        metavar="SYMBOL",
+        help="Deep-dive a single symbol in the pre-market report.",
+    )
+    parser.add_argument(
         "--indicators-table",
         action="store_true",
         help="Generate the bullish/bearish indicators table (indicators_table.html), then exit.",
@@ -229,7 +235,7 @@ def main() -> None:
         return
 
     if args.premarket_report:
-        do_premarket_report(settings, args.test)
+        do_premarket_report(settings, args.test, ticker=args.ticker)
         return
 
     if args.indicators_table:

@@ -17,7 +17,7 @@
   "earnings_watch_interval_minutes": 10,
   "earnings_watch_duration_minutes": 180,
   "premarket_report_enabled": true,
-  "premarket_check_time": "08:30",
+  "premarket_check_time": "08:45",
   "premarket_move_threshold_pct": 2.0,
   "heatmap_split_industries": ["Semiconductors", "Semiconductor Equipment & Materials"],
   "heatmap_stock_threshold_pct": 5.0

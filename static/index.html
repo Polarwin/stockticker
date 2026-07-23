@@ -302,6 +302,7 @@
 <header>
   <span>📈 Stockticker</span>
   <a class="heatmap-link" href="heatmap" target="_blank" rel="noopener">🗺 Sector Heatmap</a>
+  <a class="heatmap-link" href="premarket" target="_blank" rel="noopener">🌅 Premarket Report</a>
   <label class="alert-toggle" title="Send watchlist price updates to Telegram every few minutes">
     <input type="checkbox" id="toggle-alerts"> 🔔 Telegram price alerts
   </label>
@@ -358,6 +359,7 @@
         <label><input type="checkbox" data-ma="sma20" checked> MA20</label>
         <label><input type="checkbox" data-ma="sma50"> MA50</label>
         <label><input type="checkbox" data-ma="sma200"> MA200</label>
+        <label><input type="checkbox" data-ma="bb" checked> BB (20,2)</label>
       </span>
       <span class="range-btns">
         <button data-range="21">1M</button>
@@ -397,6 +399,9 @@
 
 <script>
 const MA_COLORS = { sma5: '#2962ff', sma20: '#ff9800', sma50: '#9c27b0', sma200: '#f23645' };
+// Bollinger Bands: upper/lower share a muted gray-blue; the middle band is
+// fainter and dashed. Keys match the /api/prices JSON fields.
+const BB_KEYS = ['bb_upper', 'bb_middle', 'bb_lower'];
 
 let remindDays = 7;
 let currentSymbol = null;
@@ -406,6 +411,7 @@ let volumeSeries = null;
 let lastPriceLine = null;
 let currentEarningsDate = null;
 let maSeries = {};
+let bbSeries = {};
 let priceData = null;
 let macdChart = null, rsiChart = null;
 let macdLineSeries = null, macdSignalSeries = null, macdHistSeries = null, rsiSeries = null;
@@ -698,6 +704,7 @@ function clearChart() {
   candleSeries = volumeSeries = lastPriceLine = null;
   macdLineSeries = macdSignalSeries = macdHistSeries = rsiSeries = null;
   maSeries = {};
+  bbSeries = {};
 }
 
 const CHART_OPTIONS = {
@@ -739,6 +746,15 @@ function buildChart() {
   maSeries = {};
   for (const [key, color] of Object.entries(MA_COLORS)) {
     maSeries[key] = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false });
+  }
+  bbSeries = {};
+  for (const key of BB_KEYS) {
+    bbSeries[key] = chart.addLineSeries({
+      color: key === 'bb_middle' ? 'rgba(125,140,163,0.5)' : '#7d8ca3',
+      lineWidth: 1,
+      lineStyle: key === 'bb_middle' ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid,
+      priceLineVisible: false,
+    });
   }
 
   // MACD pane: histogram + macd line + signal line.
@@ -835,6 +851,21 @@ function renderSeries() {
   }
 
   document.querySelectorAll('.ma-toggles input').forEach(cb => {
+    // The BB toggle drives three band series instead of one MA series.
+    if (cb.dataset.ma === 'bb') {
+      for (const key of BB_KEYS) {
+        const series = bbSeries[key];
+        if (!series) continue;
+        if (!cb.checked) { series.setData([]); continue; }
+        const pts = [];
+        priceData.dates.forEach((d, i) => {
+          const v = priceData[key] && priceData[key][i];
+          if (v != null) pts.push({ time: d, value: v });
+        });
+        series.setData(pts);
+      }
+      return;
+    }
     const series = maSeries[cb.dataset.ma];
     if (!series) return;
     if (!cb.checked) { series.setData([]); return; }
