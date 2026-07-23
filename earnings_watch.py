@@ -40,6 +40,7 @@ from ticker import fetch_live_quotes, format_price_line
 
 GUIDANCE_KEYWORDS = ("guidance", "outlook", "forecast")
 # Poll window in market-local time; covers both BMO and AMC releases.
+# Gates release detection only; active watches run their full duration.
 POLL_START = dt_time(6, 0)
 POLL_END = dt_time(21, 0)
 # How far back to collect news when the release is first detected.
@@ -232,18 +233,19 @@ def _parse_stored(value: str | None, tz: ZoneInfo) -> datetime | None:
 def run_watch_tick(settings: dict, test: bool = False) -> list[str]:
     """Advance every active post-earnings watch by one step.
 
-    Called once per daemon loop iteration; self-limits to earnings days and
-    the poll window. Returns the Telegram messages to send (empty when there
-    is nothing to report). Prints timestamped console lines throughout. In
-    test mode nothing is written to the database.
+    Called once per daemon loop iteration; self-limits to earnings days.
+    The poll window gates release *detection* only — a watch that already
+    detected runs its full duration even past POLL_END. Returns the
+    Telegram messages to send (empty when there is nothing to report).
+    Prints timestamped console lines throughout. In test mode nothing is
+    written to the database.
     """
     if not settings.get("earnings_watch_enabled", True):
         return []
 
     market_tz = ZoneInfo(settings["market_timezone"])
     now = datetime.now(market_tz)
-    if not POLL_START <= now.time() <= POLL_END:
-        return []
+    in_poll_window = POLL_START <= now.time() <= POLL_END
     today = now.date().isoformat()
     timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
     interval = timedelta(minutes=settings["earnings_watch_interval_minutes"])
@@ -281,6 +283,8 @@ def run_watch_tick(settings: dict, test: bool = False) -> list[str]:
             detected_at = _parse_stored(state["detected_at"], market_tz)
 
             if detected_at is None:
+                if not in_poll_window:
+                    continue
                 try:
                     current = fetch_latest_quarter(symbol)
                 except ValueError as exc:
