@@ -90,10 +90,11 @@ REPORT_THEME = """
 
 def nav_html(active: str) -> str:
     links = (
-        ("dashboard", "/", "Dashboard"),
-        ("fundamentals", "/fundamentals", "Fundamentals"),
-        ("premarket", "/premarket", "Pre-market"),
-        ("heatmap", "/heatmap", "Heatmap"),
+        ("dashboard", "./", "Dashboard"),
+        ("fundamentals", "fundamental_dashboard.html", "Fundamentals"),
+        ("premarket", "premarket_report.html", "Pre-market"),
+        ("indicators", "indicators_table.html", "Technical"),
+        ("heatmap", "sector_heatmap.html", "Heatmap"),
     )
     rendered = "".join(
         f'<a class="nav-link{" active" if key == active else ""}" '
@@ -102,7 +103,7 @@ def nav_html(active: str) -> str:
     )
     return (
         '<nav class="app-nav">'
-        '<a class="brand" href="/"><span class="brand-mark">↗</span>'
+        '<a class="brand" href="./"><span class="brand-mark">↗</span>'
         "<span>Stockticker</span></a>"
         f"{rendered}</nav>"
     )

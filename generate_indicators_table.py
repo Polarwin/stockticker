@@ -336,7 +336,7 @@ def build_table_html(results: list[dict], generated_at: str) -> str:
 </style>
 </head>
 <body>
-{nav_html("dashboard")}
+{nav_html("indicators")}
 <div class="container">
 <h1>Technical Indicators &mdash; Bullish/Bearish Confluence</h1>
 <p class="meta">Generated {html.escape(generated_at)} &middot; daily bars, latest close</p>

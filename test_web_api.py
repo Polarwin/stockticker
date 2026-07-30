@@ -7,9 +7,54 @@ tolerates a failed live-quote overlay (falls back to stored bars).
 """
 
 import unittest
+from html.parser import HTMLParser
+from urllib.parse import urljoin, urlparse
 from unittest import mock
 
+from ui_styles import nav_html
 from web import app
+
+
+class TestReportRoutes(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.client = app.test_client()
+
+    def test_generated_report_filenames_are_supported_routes(self):
+        with mock.patch(
+            "generate_sector_heatmap.generate_sector_heatmap",
+            return_value=None,
+        ):
+            paths = (
+                "/fundamental_dashboard.html",
+                "/premarket_report.html",
+                "/indicators_table.html",
+                "/sector_heatmap.html",
+            )
+            for path in paths:
+                with self.subTest(path=path):
+                    self.assertEqual(self.client.get(path).status_code, 200)
+
+    def test_shared_navigation_stays_under_reverse_proxy_prefix(self):
+        class NavLinks(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.hrefs = []
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "a":
+                    self.hrefs.append(dict(attrs).get("href"))
+
+        parser = NavLinks()
+        parser.feed(nav_html("fundamentals"))
+        source = "http://192.168.0.9/stockticker/fundamental_dashboard.html"
+        resolved = [urlparse(urljoin(source, href)).path for href in parser.hrefs]
+        self.assertTrue(
+            all(path.startswith("/stockticker/") for path in resolved),
+            resolved,
+        )
+        self.assertIn("/stockticker/", resolved)
+        self.assertIn("/stockticker/sector_heatmap.html", resolved)
 
 
 class TestPricesBollinger(unittest.TestCase):
