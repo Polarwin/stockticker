@@ -735,7 +735,8 @@ def _stock_card(result: dict) -> str:
     )
 
     return (
-        f'<section class="card"><h2>{_esc(ticker)}'
+        f'<section class="card"><h2><a href="stock/{_esc(ticker)}">'
+        f'{_esc(ticker)}</a>'
         f' <span class="meta">{_esc(result.get("name"))} &middot; '
         f'{_esc(result.get("sector") or "Unknown sector")} &middot; '
         f'price {_fmt(result.get("price"), 2)}</span></h2>'
@@ -794,7 +795,10 @@ def _peer_table(results: list[dict]) -> str:
             continue
         ratios = r.get("ratios") or {}
         dcf = r.get("dcf") or {}
-        cells = [f'<td data-v="{_esc(r["ticker"])}"><b>{_esc(r["ticker"])}</b></td>']
+        cells = [
+            f'<td data-v="{_esc(r["ticker"])}">'
+            f'<a href="stock/{_esc(r["ticker"])}"><b>{_esc(r["ticker"])}</b></a></td>'
+        ]
         for key in ("pe_ratio", "pb_ratio", "ps_ratio", "ev_ebitda"):
             value = ratios.get(key)
             premium = (r["peer_comparison"].get(key) or {}).get(
@@ -834,7 +838,7 @@ def _earnings_section(earnings_calendar: list[dict] | None) -> str:
     if not earnings_calendar:
         return ""
     rows = "".join(
-        f"<tr><td>{_esc(e['ticker'])}</td><td>{_esc(e['date'])}</td>"
+        f"<tr><td><a href=\"stock/{_esc(e['ticker'])}\">{_esc(e['ticker'])}</a></td><td>{_esc(e['date'])}</td>"
         f"<td>{_esc('N/A' if e.get('eps_estimate') is None else f'{e['eps_estimate']:g}')}</td></tr>"
         for e in earnings_calendar
     )

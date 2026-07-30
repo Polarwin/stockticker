@@ -314,7 +314,7 @@ def render_stock_page(data: dict) -> str:
 <title>{_esc(data["ticker"])} — Technical &amp; Fundamental</title>
 <style>{REPORT_THEME}</style>
 </head><body>
-{nav_html("dashboard")}
+{nav_html("dashboard", prefix="../")}
 <main class="container">
 {_header(data)}
 {sections}

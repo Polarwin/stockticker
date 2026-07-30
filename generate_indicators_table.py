@@ -279,7 +279,7 @@ def build_table_html(results: list[dict], generated_at: str) -> str:
 
     summary_rows = "".join(
         "<tr>"
-        f"<td>{html.escape(r['symbol'])}</td>"
+        f"<td><a href=\"stock/{html.escape(r['symbol'])}\">{html.escape(r['symbol'])}</a></td>"
         f"<td>{r['score']:.1f}</td>"
         f'<td><span class="pill {_label_class(r["label"])}">{r["label"]}</span></td>'
         "</tr>"

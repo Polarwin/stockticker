@@ -88,7 +88,9 @@ REPORT_THEME = """
 """
 
 
-def nav_html(active: str) -> str:
+def nav_html(active: str, prefix: str = "") -> str:
+    """Shared top nav. prefix is prepended to the relative hrefs — pages
+    served from a nested path (e.g. /stock/<ticker>) pass prefix="../"."""
     links = (
         ("dashboard", "./", "Dashboard"),
         ("fundamentals", "fundamental_dashboard.html", "Fundamentals"),
@@ -98,7 +100,7 @@ def nav_html(active: str) -> str:
     )
     rendered = "".join(
         f'<a class="nav-link{" active" if key == active else ""}" '
-        f'href="{html.escape(href)}">{html.escape(label)}</a>'
+        f'href="{html.escape(prefix + href)}">{html.escape(label)}</a>'
         for key, href, label in links
     )
     return (
