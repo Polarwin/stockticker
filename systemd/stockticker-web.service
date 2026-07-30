@@ -1,14 +1,18 @@
+# Reference copy of the deployed /etc/systemd/system/stockticker-web.service
+# (system-level unit, not a user unit).
 [Unit]
-Description=stockticker web UI + background notifications
-After=network-online.target futuopend.service
+Description=Stockticker web UI
+After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Projects/stockticker
-ExecStart=%h/Projects/stockticker/bin/python %h/Projects/stockticker/web.py
-Restart=on-failure
+User=justin
+WorkingDirectory=/home/justin/Projects/stockticker
+ExecStart=/home/justin/Projects/stockticker/bin/python /home/justin/Projects/stockticker/web.py
+Restart=always
 RestartSec=10
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
