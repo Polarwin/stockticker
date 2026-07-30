@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 import yfinance as yf
+from ui_styles import REPORT_THEME, nav_html
 from dotenv import load_dotenv
 
 from db import (
@@ -765,6 +766,7 @@ _CSS = """
              padding: 12px 16px; margin: 16px 0; font-size: 0.85rem; }
   ul.compact { margin: 8px 0; padding-left: 20px; }
 """
+_CSS += REPORT_THEME
 
 
 def _label_class(label: str) -> str:
@@ -1048,6 +1050,7 @@ def render_html(data: dict) -> str:
 <style>{_CSS}</style>
 </head>
 <body>
+{nav_html("premarket")}
 <div class="container">
 <h1>{html.escape(title)}</h1>
 <p class="meta">Generated {html.escape(data['generated_at'])} &middot;

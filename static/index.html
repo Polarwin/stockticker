@@ -296,27 +296,96 @@
     #chart { height: 320px; }
     .range-btns { margin-left: 0; }
   }
+
+  /* --- unified application shell --- */
+  :root { color-scheme:dark; --bg:#07111f; --panel:#0d1a2b; --border:#20344e;
+    --text:#e7eef8; --muted:#8fa3ba; --accent:#58a6ff; --up:#34d399; --down:#fb7185; }
+  body { min-height:100vh; line-height:1.45;
+    font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    background:radial-gradient(circle at 12% -10%,rgba(88,166,255,.14),transparent 30rem),
+      radial-gradient(circle at 88% 0%,rgba(94,234,212,.08),transparent 25rem),var(--bg); }
+  header.app-header { position:sticky; top:0; z-index:50; min-height:64px; padding:10px 18px;
+    gap:10px; background:rgba(7,17,31,.86); border-bottom:1px solid rgba(143,163,186,.16);
+    backdrop-filter:blur(16px); }
+  .brand { display:flex; align-items:center; gap:10px; margin-right:8px; }
+  .brand-mark { display:grid; place-items:center; width:34px; height:34px; border-radius:11px;
+    color:#06101c; background:linear-gradient(135deg,#58a6ff,#5eead4);
+    box-shadow:0 8px 24px rgba(88,166,255,.22); font-weight:900; }
+  .brand-copy { display:flex; flex-direction:column; line-height:1.05; }
+  .brand-copy small { color:var(--muted); font-size:10px; font-weight:600; margin-top:4px; }
+  .primary-nav { display:flex; align-items:center; gap:4px; margin-right:auto; }
+  .primary-nav a { color:var(--muted); text-decoration:none; font-size:12px; font-weight:650;
+    padding:7px 9px; border:1px solid transparent; border-radius:9px; }
+  .primary-nav a:hover { color:var(--text); background:rgba(255,255,255,.04); }
+  .primary-nav a.active { color:var(--text); background:rgba(88,166,255,.12);
+    border-color:rgba(88,166,255,.22); }
+  header .alert-toggle { padding:7px 10px; border:1px solid var(--border); border-radius:9px;
+    background:rgba(13,26,43,.72); }
+  header .hint { max-width:210px; line-height:1.25; }
+  .panel { background:linear-gradient(145deg,rgba(18,34,56,.92),rgba(13,26,43,.96));
+    border-color:var(--border); border-radius:16px; box-shadow:0 18px 48px rgba(0,0,0,.2); }
+  #calendar-panel { margin:16px 18px 0; padding:14px 16px; }
+  .calendar-head { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .eyebrow { color:var(--muted); text-transform:uppercase; letter-spacing:.08em;
+    font-size:10px; font-weight:750; }
+  .calendar-head .tabs { margin:0; }
+  .calendar-head #earnings-list { flex:1 1 100%; }
+  .layout { gap:16px; padding:16px 18px 24px; align-items:flex-start; }
+  #watchlist-panel { width:min(620px,47vw); padding:16px; }
+  #chart-panel { padding:18px; }
+  #add-input,#refresh-btn,.range-btns button { background:rgba(7,17,31,.65);
+    border-color:var(--border); border-radius:9px; }
+  #add-input { padding:10px 12px; }
+  #add-btn { border-radius:9px; padding:9px 16px; font-weight:700;
+    background:linear-gradient(135deg,#367ff3,#58a6ff); box-shadow:0 8px 20px rgba(41,98,255,.2); }
+  #watchlist-scroll { border:1px solid rgba(143,163,186,.12); border-radius:12px; }
+  #watchlist-table th { padding:8px 7px; background:#102036; text-transform:uppercase;
+    letter-spacing:.045em; font-size:10px; }
+  #watchlist-table td { padding:8px 7px; }
+  #watchlist-table tbody tr:hover { background:rgba(88,166,255,.055); }
+  #watchlist-table tbody tr.selected { background:rgba(88,166,255,.18); }
+  #watchlist-table tbody tr.selected td { color:var(--text); }
+  #chart-symbol { font-size:22px; font-weight:750; letter-spacing:-.025em; }
+  #chart-wrap { border:1px solid rgba(143,163,186,.12); border-radius:12px; overflow:hidden; }
+  .tabs { padding:3px; border-radius:10px; background:rgba(7,17,31,.55); }
+  .tab { border-radius:7px; }
+  #indicators-panel { margin-top:16px; padding-top:16px; border-top:1px solid var(--border); }
+  #toast { border:1px solid var(--border); border-radius:12px; box-shadow:0 16px 40px rgba(0,0,0,.35); }
+  input[type="checkbox"] { accent-color:var(--accent); }
+  @media(max-width:1050px) { header .hint{display:none}.layout{flex-direction:column}
+    #watchlist-panel{width:100%} }
+  @media(max-width:720px) { header.app-header{position:relative;align-items:flex-start;
+      flex-wrap:wrap;padding:10px 12px}.brand-copy small{display:none}.primary-nav{order:3;
+      width:100%;overflow-x:auto}.primary-nav a{white-space:nowrap}header .alert-toggle{margin-left:auto}
+    #calendar-panel{margin:10px 10px 0}.layout{padding:10px}#watchlist-panel,#chart-panel{padding:12px}
+    #chart{height:330px}#watchlist-scroll{max-height:430px} }
 </style>
 </head>
 <body>
-<header>
-  <span>📈 Stockticker</span>
-  <a class="heatmap-link" href="heatmap" target="_blank" rel="noopener">🗺 Sector Heatmap</a>
-  <a class="heatmap-link" href="premarket" target="_blank" rel="noopener">🌅 Premarket Report</a>
-  <a class="heatmap-link" href="fundamentals" target="_blank" rel="noopener">💰 Fundamentals</a>
+<header class="app-header">
+  <div class="brand"><span class="brand-mark">↗</span><span class="brand-copy">Stockticker<small>Portfolio intelligence</small></span></div>
+  <nav class="primary-nav" aria-label="Primary">
+    <a class="active" href="/">Dashboard</a>
+    <a href="fundamentals">Fundamentals</a>
+    <a href="premarket">Pre-market</a>
+    <a href="heatmap">Heatmap</a>
+  </nav>
   <label class="alert-toggle" title="Send watchlist price updates to Telegram every few minutes">
-    <input type="checkbox" id="toggle-alerts"> 🔔 Telegram price alerts
+    <input type="checkbox" id="toggle-alerts"> Alerts
   </label>
   <span class="hint">Click a symbol to view its chart · hover the chart for OHLC</span>
 </header>
 
 <div class="panel" id="calendar-panel">
-  <div class="tabs">
-    <button class="tab active" data-range="week">This week</button>
-    <button class="tab" data-range="next-week">Next week</button>
-    <button class="tab" data-range="month">This month</button>
+  <div class="calendar-head">
+    <span class="eyebrow">Earnings calendar</span>
+    <div class="tabs">
+      <button class="tab active" data-range="week">This week</button>
+      <button class="tab" data-range="next-week">Next week</button>
+      <button class="tab" data-range="month">This month</button>
+    </div>
+    <div id="earnings-list"></div>
   </div>
-  <div id="earnings-list"></div>
 </div>
 
 <div class="layout">
@@ -399,7 +468,7 @@
 <div id="toast"></div>
 
 <script>
-const MA_COLORS = { sma5: '#2962ff', sma20: '#ff9800', sma50: '#9c27b0', sma200: '#f23645' };
+const MA_COLORS = { sma5: '#58a6ff', sma20: '#fbbf24', sma50: '#c084fc', sma200: '#fb7185' };
 // Bollinger Bands: upper/lower share a muted gray-blue; the middle band is
 // fainter and dashed. Keys match the /api/prices JSON fields.
 const BB_KEYS = ['bb_upper', 'bb_middle', 'bb_lower'];
@@ -712,10 +781,10 @@ function clearChart() {
 }
 
 const CHART_OPTIONS = {
-  layout: { background: { color: '#1e222d' }, textColor: '#d1d4dc' },
-  grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
-  timeScale: { borderColor: '#2a2e39' },
-  rightPriceScale: { borderColor: '#2a2e39' },
+  layout: { background: { color: '#0d1a2b' }, textColor: '#8fa3ba' },
+  grid: { vertLines: { color: '#172941' }, horzLines: { color: '#172941' } },
+  timeScale: { borderColor: '#20344e' },
+  rightPriceScale: { borderColor: '#20344e' },
   crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   autoSize: true,
 };
@@ -736,8 +805,8 @@ function buildChart() {
 
   chart = LightweightCharts.createChart(document.getElementById('chart'), CHART_OPTIONS);
   candleSeries = chart.addCandlestickSeries({
-    upColor: '#089981', downColor: '#f23645',
-    wickUpColor: '#089981', wickDownColor: '#f23645',
+    upColor: '#34d399', downColor: '#fb7185',
+    wickUpColor: '#34d399', wickDownColor: '#fb7185',
     borderVisible: false,
   });
   // Volume histogram on an overlay scale pinned to the bottom 20%.

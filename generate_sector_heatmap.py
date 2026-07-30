@@ -25,6 +25,7 @@ from db import (
     upsert_sector,
 )
 from ticker import fetch_live_quotes
+from ui_styles import REPORT_THEME, nav_html
 
 OUTPUT_PATH = Path(__file__).with_name("sector_heatmap.html")
 UNKNOWN_SECTOR = "Unknown"
@@ -229,10 +230,29 @@ def build_heatmap_html(rows: list[dict], generated_at: str) -> str:
         )
     )
     fig.update_layout(
-        title=f"Sector Allocation Heatmap — {generated_at}",
-        margin=dict(t=50, l=10, r=10, b=10),
+        paper_bgcolor="#07111f",
+        plot_bgcolor="#07111f",
+        font=dict(color="#e7eef8", family="Inter, system-ui, sans-serif"),
+        margin=dict(t=12, l=10, r=10, b=10),
     )
-    return fig.to_html(include_plotlyjs=True, full_html=True, config={"responsive": True})
+    chart = fig.to_html(
+        include_plotlyjs=True, full_html=False, config={"responsive": True}
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sector Allocation Heatmap</title><style>{REPORT_THEME}
+.heatmap-shell {{ max-width: 1400px; margin: auto; padding: 28px 20px 40px; }}
+.heatmap-frame {{ height: calc(100vh - 190px); min-height: 560px; margin-top: 18px;
+  overflow: hidden; border: 1px solid var(--border); border-radius: 16px;
+  background: var(--surface); box-shadow: var(--shadow); }}
+.heatmap-frame > div {{ width: 100%; height: 100%; }}
+@media(max-width:720px) {{ .heatmap-shell {{ padding:20px 12px; }}
+  .heatmap-frame {{ min-height:680px; height:calc(100vh - 170px); }} }}
+</style></head><body>{nav_html("heatmap")}
+<main class="heatmap-shell"><h1>Sector Allocation</h1>
+<p class="meta">Portfolio weight and daily performance &middot; {generated_at}</p>
+<section class="heatmap-frame">{chart}</section></main></body></html>"""
 
 
 def generate_sector_heatmap(

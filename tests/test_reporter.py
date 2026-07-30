@@ -116,6 +116,22 @@ class TestRenderDashboard(unittest.TestCase):
         sparse_page = reporter.render_dashboard([SPARSE_RESULT])
         self.assertIn("builds up as daily snapshots accumulate", sparse_page)
 
+    def test_pe_chart_clips_extreme_values_without_hiding_them_from_data(self):
+        history = [
+            {"date": f"2026-01-{day:02d}", "pe_ratio": 20.0 + day,
+             "sector_median_pe": 25.0}
+            for day in range(1, 31)
+        ]
+        history[-1]["pe_ratio"] = 10_000.0
+        page = reporter.render_dashboard([
+            make_result(valuation_history=history)
+        ])
+        self.assertIn("extreme observation", page)
+
+    def test_dashboard_names_both_data_sources(self):
+        page = reporter.render_dashboard([make_result()])
+        self.assertIn("Futu OpenD + yfinance data", page)
+
 
 class TestTelegramAlert(unittest.TestCase):
     def test_alert_content_and_limit(self):
@@ -227,6 +243,30 @@ class TestLoadResults(unittest.TestCase):
         self.assertEqual(result["ratios"]["pe_ratio"], 20.0)
         self.assertEqual(result["price"], 100.0)  # from the DCF row
         self.assertIn("total", result["fundamental_score"])
+
+    def test_price_falls_back_to_market_cap_and_newest_available_shares(self):
+        conn = database.init_db(":memory:")
+        try:
+            database.upsert_company_profile(conn, {
+                "ticker": "SEED", "name": "Seed Co",
+                "market_cap": 1_000.0,
+            })
+            database.upsert_quarterly_financials(conn, [
+                {
+                    "ticker": "SEED", "fiscal_date": "2026-06-30",
+                    "report_type": "10-Q", "revenue": 100.0,
+                    "shares_outstanding": None,
+                },
+                {
+                    "ticker": "SEED", "fiscal_date": "2026-03-31",
+                    "report_type": "10-Q", "revenue": 90.0,
+                    "shares_outstanding": 10.0,
+                },
+            ])
+            results = reporter.load_results(conn, ["SEED"])
+        finally:
+            conn.close()
+        self.assertEqual(results[0]["price"], 100.0)
 
 
 class TestUpdateAllTTL(unittest.TestCase):

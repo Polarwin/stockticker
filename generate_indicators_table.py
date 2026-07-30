@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 import yfinance as yf
+from ui_styles import REPORT_THEME, nav_html
 
 from db import init_db, resolve_db_path
 from indicators import bollinger_bands, ema, macd, rsi, sma
@@ -331,9 +332,11 @@ def build_table_html(results: list[dict], generated_at: str) -> str:
     .card {{ overflow-x: auto; }}
     table {{ min-width: 560px; }}
   }}
+  {REPORT_THEME}
 </style>
 </head>
 <body>
+{nav_html("dashboard")}
 <div class="container">
 <h1>Technical Indicators &mdash; Bullish/Bearish Confluence</h1>
 <p class="meta">Generated {html.escape(generated_at)} &middot; daily bars, latest close</p>

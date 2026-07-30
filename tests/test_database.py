@@ -69,6 +69,12 @@ class TestSchema(unittest.TestCase):
                       "current_assets", "current_liabilities"):
             self.assertIn(extra, cols)
 
+    def test_company_profile_quote_columns(self):
+        cols = self.columns("company_profiles")
+        for extra in ("current_price", "shares_outstanding", "currency",
+                      "financial_currency"):
+            self.assertIn(extra, cols)
+
     def test_moat_metrics_score_cache_columns(self):
         cols = self.columns("moat_metrics")
         self.assertIn("moat_score", cols)
@@ -109,6 +115,18 @@ class TestRoundTrip(unittest.TestCase):
         annual = database.get_quarterly_financials(self.conn, "TEST", "10-K")
         self.assertEqual(len(annual), 1)
         self.assertEqual(annual[0]["report_type"], "10-K")
+
+    def test_company_profile_persists_quote_metadata(self):
+        database.upsert_company_profile(self.conn, {
+            "ticker": "TEST", "name": "Test Co", "current_price": 123.45,
+            "shares_outstanding": 10_000, "currency": "USD",
+            "financial_currency": "EUR",
+        })
+        stored = database.get_company_profile(self.conn, "TEST")
+        self.assertEqual(stored["current_price"], 123.45)
+        self.assertEqual(stored["shares_outstanding"], 10_000)
+        self.assertEqual(stored["currency"], "USD")
+        self.assertEqual(stored["financial_currency"], "EUR")
 
     def test_quarterly_financials_upsert_is_idempotent(self):
         database.upsert_quarterly_financials(self.conn, [make_fin_row()])

@@ -34,6 +34,7 @@ from fundamentals import (
     scorer,
 )
 from ticker import load_watchlist
+from ui_styles import REPORT_THEME, nav_html
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 DASHBOARD_PATH = PROJECT_DIR / "fundamental_dashboard.html"
@@ -331,6 +332,27 @@ def load_results(conn: sqlite3.Connection, tickers: list[str]) -> list[dict]:
                 dcf.get("fcf_growth_rate_terminal") or 0.025,
             )
 
+        latest_fin = calculator.latest(fin_rows) or {}
+        price = profile.get("current_price")
+        if price is None and dcf is not None:
+            price = dcf.get("current_price")
+        if price is None:
+            market_cap = profile.get("market_cap")
+            shares = (
+                profile.get("shares_outstanding")
+                or latest_fin.get("shares_outstanding")
+                or next(
+                    (
+                        row.get("shares_outstanding")
+                        for row in fin_rows
+                        if row.get("shares_outstanding")
+                    ),
+                    None,
+                )
+            )
+            if market_cap is not None and shares and shares > 0:
+                price = market_cap / shares
+
         peer_summary = {}
         for row in peer_rows:
             metric = row["metric"]
@@ -359,7 +381,7 @@ def load_results(conn: sqlite3.Connection, tickers: list[str]) -> list[dict]:
             "market_cap": profile.get("market_cap"),
             "employees": profile.get("employees"),
             # Price is only persisted on the DCF row.
-            "price": dcf.get("current_price") if dcf else None,
+            "price": price,
             "ratios": ratios,
             "history_percentiles": history_percentiles,
             "sector_percentile": sector_percentile,
@@ -422,6 +444,7 @@ _CSS = """
   .dcfbox { background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
              padding: 10px 14px; }
 """
+_CSS += REPORT_THEME
 
 
 def _esc(value) -> str:
@@ -469,13 +492,19 @@ def _score_color(score: float | None) -> str:
     return "#d62728"
 
 
-def _pctile_bar(pct: float | None, label: str) -> str:
+def _pctile_bar(
+    pct: float | None, label: str, unavailable_reason: str | None = None
+) -> str:
     """One labeled 0-100 percentile bar (gray when no data)."""
     width = 0 if pct is None else max(0.0, min(100.0, pct))
     text = "N/A" if pct is None else f"{pct:.0f}"
+    title = (
+        f' title="{_esc(unavailable_reason)}"'
+        if pct is None and unavailable_reason else ""
+    )
     return (
         f'<div class="kv"><span class="k">{_esc(label)}</span>'
-        f'<span style="display:flex;align-items:center;gap:8px">'
+        f'<span{title} style="display:flex;align-items:center;gap:8px">'
         f'<span class="pbar"><span class="pfill" style="width:{width:.0f}%;'
         f'background:{_pctile_color(pct)}"></span></span>{text}</span></div>'
     )
@@ -551,18 +580,26 @@ def _pe_chart(history_rows: list[dict]) -> str:
     width, height, pad = 600, 200, 34
     pes = [p[1] for p in points]
     sector_values = [p[2] for p in points if p[2] is not None]
-    lo = min(pes + sector_values)
-    hi = max(pes + sector_values)
+    all_values = sorted(pes + sector_values)
+    # A near-zero earnings denominator can create a valid P/E in the
+    # thousands and flatten every ordinary observation. Scale to the
+    # central 96% and clip only the drawing; underlying values remain intact.
+    low_index = int(0.02 * (len(all_values) - 1))
+    high_index = int(0.98 * (len(all_values) - 1))
+    lo = all_values[low_index]
+    hi = all_values[high_index]
     if hi == lo:
         hi = lo + 1.0
     margin = (hi - lo) * 0.08
-    lo, hi = lo - margin, hi + margin
+    lo, hi = max(0.0, lo - margin), hi + margin
+    clipped = sum(value < lo or value > hi for value in all_values)
 
     def x(index: int) -> float:
         return pad + index * (width - 2 * pad) / (len(points) - 1)
 
     def y(value: float) -> float:
-        return height - pad - (value - lo) / (hi - lo) * (height - 2 * pad)
+        bounded = max(lo, min(hi, value))
+        return height - pad - (bounded - lo) / (hi - lo) * (height - 2 * pad)
 
     ordered = sorted(pes)
     q25 = ordered[int(0.25 * (len(ordered) - 1))]
@@ -600,7 +637,14 @@ def _pe_chart(history_rows: list[dict]) -> str:
         f'font-size="10" text-anchor="end">{_esc(points[-1][0])}</text>'
         "</svg>"
         '<p class="meta">Blue: own P/E &middot; dashed gold: sector median '
-        "&middot; gray band: own 25-75% range</p>"
+        "&middot; gray band: own 25-75% range"
+        + (
+            f" &middot; {clipped} extreme "
+            f'observation{"s" if clipped != 1 else ""} clipped to keep '
+            "the chart readable"
+            if clipped else ""
+        )
+        + "</p>"
     )
 
 
@@ -656,7 +700,9 @@ def _stock_card(result: dict) -> str:
         for key in RATIO_KEYS
     )
     percentile_bars += _pctile_bar(
-        result.get("sector_percentile"), "P/E vs sector"
+        result.get("sector_percentile"),
+        "P/E vs sector",
+        "Unavailable when this company or too few sector peers have a valid P/E.",
     )
 
     moat_bars = "".join(
@@ -847,9 +893,10 @@ def render_dashboard(
 <style>{_CSS}</style>
 </head>
 <body>
+{nav_html("fundamentals")}
 <div class="container">
 <h1>Fundamental Dashboard</h1>
-<p class="meta">Generated {html.escape(generated)} &middot; yfinance data &middot;
+<p class="meta">Generated {html.escape(generated)} &middot; Futu OpenD + yfinance data &middot;
 sorted cheapest &rarr; most expensive (percentile vs sector peers, then vs own history) &middot;
 DCF: 5yr FCF projection, terminal growth 2.5%, WACC = risk-free + beta x 5.5%</p>
 

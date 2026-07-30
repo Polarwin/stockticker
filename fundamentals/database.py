@@ -13,7 +13,8 @@ DB_PATH = Path(__file__).resolve().parent.parent / "data" / "fundamentals.db"
 
 COMPANY_PROFILE_COLUMNS = (
     "ticker", "name", "sector", "industry", "market_cap", "employees",
-    "country", "business_summary",
+    "country", "business_summary", "current_price", "shares_outstanding",
+    "currency", "financial_currency",
 )
 
 QUARTERLY_FINANCIALS_COLUMNS = (
@@ -75,6 +76,10 @@ _SCHEMA = (
         employees        INTEGER,
         country          TEXT,
         business_summary TEXT,
+        current_price     REAL,
+        shares_outstanding REAL,
+        currency          TEXT,
+        financial_currency TEXT,
         updated_at       DATE
     )
     """,
@@ -239,6 +244,22 @@ def init_db(path: Path | str | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     for statement in _SCHEMA:
         conn.execute(statement)
+    # CREATE TABLE IF NOT EXISTS does not add columns to an existing DB.
+    # Keep this small migration idempotent so older installations retain
+    # their data and begin persisting quote metadata on the next refresh.
+    profile_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(company_profiles)")
+    }
+    for column, sql_type in (
+        ("current_price", "REAL"),
+        ("shares_outstanding", "REAL"),
+        ("currency", "TEXT"),
+        ("financial_currency", "TEXT"),
+    ):
+        if column not in profile_columns:
+            conn.execute(
+                f"ALTER TABLE company_profiles ADD COLUMN {column} {sql_type}"
+            )
     conn.commit()
     return conn
 
