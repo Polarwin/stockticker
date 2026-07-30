@@ -164,6 +164,17 @@ class TestDedupeQuarters(unittest.TestCase):
         ]
         self.assertEqual(ttm(rows, "net_income"), 100.0)
 
+    def test_pb_uses_newest_row_with_equity(self):
+        # The latest quarter's balance data can lag (empty report); P/B
+        # must fall back to the newest row that has equity.
+        rows = [
+            dict(make_quarter("2026-06-29"), shareholders_equity=None),
+            dict(make_quarter("2026-03-30"),
+                 shareholders_equity=2_000_000_000.0),
+        ]
+        ratios = compute_valuation_ratios(PROFILE, rows, 100.0)
+        self.assertAlmostEqual(ratios["pb_ratio"], 5.0)
+
 
 if __name__ == "__main__":
     unittest.main()

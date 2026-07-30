@@ -96,7 +96,16 @@ def compute_valuation_ratios(
     if market_cap is not None and forward_eps and forward_eps > 0 and shares:
         forward_pe = market_cap / (forward_eps * shares)
 
-    pb_ratio = _ratio(market_cap, row.get("shareholders_equity"))
+    # Balance-sheet fields come from the newest row that actually has a
+    # value: the latest quarter's balance data sometimes lags the income
+    # statement (empty balance report), which would blank P/B and skew EV.
+    def latest_with(key):
+        return next(
+            (r.get(key) for r in _sorted(fin_rows) if r.get(key) is not None),
+            None,
+        )
+
+    pb_ratio = _ratio(market_cap, latest_with("shareholders_equity"))
     ps_ratio = _ratio(market_cap, revenue)
     p_fcf_ratio = _ratio(market_cap, fcf)
 
@@ -105,8 +114,8 @@ def compute_valuation_ratios(
         ebitda = operating_income + (depreciation or 0.0)
     ev = None
     if market_cap is not None:
-        ev = market_cap + (row.get("total_debt") or 0.0) - (
-            row.get("cash_and_equivalents") or 0.0)
+        ev = market_cap + (latest_with("total_debt") or 0.0) - (
+            latest_with("cash_and_equivalents") or 0.0)
     ev_ebitda = _ratio(ev, ebitda)
 
     peg_ratio = None

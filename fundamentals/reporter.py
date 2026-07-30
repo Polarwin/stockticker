@@ -113,6 +113,20 @@ def update_ticker(
                 "business_summary"):
         if profile.get(key) is None:
             profile[key] = existing.get(key)
+    # Still nothing stored (new ticker, or previously clobbered): ask
+    # yfinance once for the classification fields.
+    if profile.get("sector") is None:
+        try:
+            yf_profile = fetcher.fetch_profile(ticker)
+            for key in ("sector", "industry", "country", "employees",
+                        "business_summary"):
+                if profile.get(key) is None:
+                    profile[key] = yf_profile.get(key)
+        except Exception as exc:
+            print(
+                f"Warning: {ticker}: yfinance profile backfill failed ({exc})",
+                file=sys.stderr,
+            )
 
     price = profile.get("current_price") or fetcher.fetch_price(ticker)
     try:
