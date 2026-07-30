@@ -14,6 +14,7 @@ import yfinance as yf
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
 import market_news
+import stock_report
 from collector import (
     db_update_due,
     fetch_history_rows,
@@ -165,6 +166,21 @@ def indicators_table():
             404,
         )
     return send_file(INDICATORS_PATH)
+
+
+@app.get("/stock/<ticker>")
+def stock_page(ticker: str):
+    """Per-stock Technical & Fundamental report, generated on demand."""
+    ticker = ticker.strip().upper()
+    # Indexes (^VIX) are valid report targets; other routes use SYMBOL_RE.
+    if not re.match(r"^\^?[A-Z.]{1,6}$", ticker):
+        return ("Unknown ticker — use a watchlist-style symbol like AAPL.",
+                404)
+    try:
+        data = stock_report.build_stock_data(SETTINGS, ticker)
+    except Exception as exc:
+        return (f"Stock report failed for {ticker}: {exc}", 500)
+    return stock_report.render_stock_page(data)
 
 
 @app.get("/api/config")
