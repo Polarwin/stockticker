@@ -120,6 +120,29 @@ class TestRoundTrip(unittest.TestCase):
         self.assertEqual(len(stored), 1)
         self.assertEqual(stored[0]["revenue"], 2_000.0)
 
+    def test_upsert_replaces_same_quarter_from_other_source(self):
+        # Futu and yfinance fiscal period-ends differ by a few days; the
+        # upsert must replace the same quarter, not store both.
+        database.upsert_quarterly_financials(self.conn, [make_fin_row()])
+        database.upsert_quarterly_financials(
+            self.conn, [make_fin_row(fiscal_date="2025-12-26", revenue=3_000.0)]
+        )
+        self.conn.commit()
+        stored = database.get_quarterly_financials(self.conn, "TEST")
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]["fiscal_date"], "2025-12-26")
+        self.assertEqual(stored[0]["revenue"], 3_000.0)
+
+    def test_upsert_keeps_annual_and_quarterly_same_month(self):
+        database.upsert_quarterly_financials(
+            self.conn, [make_fin_row(report_type="10-K",
+                                     fiscal_date="2025-12-26")]
+        )
+        database.upsert_quarterly_financials(self.conn, [make_fin_row()])
+        self.conn.commit()
+        stored = database.get_quarterly_financials(self.conn, "TEST")
+        self.assertEqual(len(stored), 2)
+
     def test_dcf_valuation_round_trip(self):
         valuation = {
             "ticker": "TEST",

@@ -10,6 +10,26 @@ def _sorted(rows: list[dict]) -> list[dict]:
     return sorted(rows, key=lambda r: r.get("fiscal_date") or "", reverse=True)
 
 
+def dedupe_quarters(rows: list[dict]) -> list[dict]:
+    """One row per (report_type, fiscal year-month), newest date winning.
+
+    Sources disagree on fiscal period-end dates by a few days (Futu
+    2026-03-27 vs yfinance 2026-03-31 for the same quarter), so rows from
+    mixed sources would otherwise be summed twice by ttm(). Rows without
+    a fiscal_date are kept as-is.
+    """
+    seen: set[tuple[str, str]] = set()
+    result = []
+    for row in _sorted(rows):
+        day = row.get("fiscal_date") or ""
+        key = (str(row.get("report_type") or ""), day[:7])
+        if day and key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
+
+
 def ttm(rows: list[dict], key: str) -> float | None:
     """Trailing-twelve-month sum of `key`.
 
@@ -17,12 +37,14 @@ def ttm(rows: list[dict], key: str) -> float | None:
     1-3 such quarters exist, whatever exists is summed (documented choice:
     a partial sum beats no number for young coverage). When no quarterly
     row has the key, falls back to the newest annual ('10-K') value.
+    Duplicate quarter-ends from mixed sources (see dedupe_quarters) are
+    counted once.
     """
-    quarterly = [r for r in _sorted(rows)
+    quarterly = [r for r in dedupe_quarters(rows)
                  if r.get("report_type") == "10-Q" and r.get(key) is not None]
     if quarterly:
         return sum(r[key] for r in quarterly[:4])
-    annual = [r for r in _sorted(rows)
+    annual = [r for r in dedupe_quarters(rows)
               if r.get("report_type") == "10-K" and r.get(key) is not None]
     if annual:
         return annual[0][key]

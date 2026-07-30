@@ -304,6 +304,12 @@ class TestFetchFinancials(FutuTestCase):
         # "Cost of Revenue" must not collapse into revenue.
         self.assertIsNone(futu_source._map_item("Cost of Revenue"))
 
+    def test_rows_carry_statement_currency(self):
+        self._seed_reports()
+        FakeQuoteContext.statement_reports[1][0]["currency_code"] = "TWD"
+        rows = futu_source.fetch_financials("TSM")
+        self.assertEqual(rows[0]["currency"], "TWD")
+
     def test_no_reports_raises(self):
         with self.assertRaisesRegex(ValueError, "AAPL"):
             futu_source.fetch_financials("AAPL")
@@ -684,6 +690,92 @@ class TestReporterBackfill(unittest.TestCase):
             # Backfilled P/E uses the as-of annual row: mcap 1000 / 100.
             by_date = {r["date"]: r for r in rows}
             self.assertAlmostEqual(by_date["2021-01-15"]["pe_ratio"], 10.0)
+        finally:
+            conn.close()
+
+
+class TestReporterProfileMerge(unittest.TestCase):
+    """update_ticker keeps stored sector/industry when Futu has none."""
+
+    def test_missing_fields_filled_from_db(self):
+        conn = database.init_db(":memory:")
+        database.upsert_company_profile(conn, {
+            "ticker": "AAA", "name": "AAA", "sector": "Technology",
+            "industry": "Semiconductors",
+        })
+        conn.commit()
+        profile = {
+            "ticker": "AAA", "name": "AAA", "quote_type": "EQUITY",
+            "currency": "USD", "financial_currency": None,
+            "sector": None, "industry": None,
+            "shares_outstanding": 10.0, "market_cap": None,
+            "current_price": 50.0,
+        }
+        fin_rows = [{
+            "ticker": "AAA", "fiscal_date": "2020-12-31",
+            "report_type": "10-K", "net_income": 100.0,
+            "shareholders_equity": 500.0,
+        }]
+        try:
+            with (
+                mock.patch.object(reporter.futu_source, "fetch_profile",
+                                  return_value=profile),
+                mock.patch.object(reporter.futu_source, "fetch_financials",
+                                  return_value=fin_rows),
+                mock.patch.object(reporter.futu_source, "available",
+                                  return_value=False),
+                mock.patch.object(reporter.fetcher, "fetch_earnings",
+                                  return_value=[]),
+                mock.patch.object(reporter.fetcher, "is_non_equity_symbol",
+                                  return_value=False),
+                mock.patch.object(reporter.fetcher, "load_non_equity",
+                                  return_value=set()),
+            ):
+                result = reporter.update_ticker(conn, "AAA",
+                                                risk_free_rate=0.04)
+                conn.commit()
+            self.assertEqual(result["sector"], "Technology")
+            self.assertEqual(result["industry"], "Semiconductors")
+            stored = database.get_company_profile(conn, "AAA")
+            self.assertEqual(stored["sector"], "Technology")
+        finally:
+            conn.close()
+
+    def test_fx_conversion_uses_row_currency_when_profile_lacks_it(self):
+        conn = database.init_db(":memory:")
+        profile = {
+            "ticker": "TSM", "name": "TSMC", "quote_type": "EQUITY",
+            "currency": "USD", "financial_currency": None,
+            "shares_outstanding": 5.0, "market_cap": 1e12,
+            "current_price": 200.0,
+        }
+        fin_rows = [{
+            "ticker": "TSM", "fiscal_date": "2020-12-31",
+            "report_type": "10-K", "net_income": 500e9, "currency": "TWD",
+            "shareholders_equity": 2e12,
+        }]
+        try:
+            with (
+                mock.patch.object(reporter.futu_source, "fetch_profile",
+                                  return_value=profile),
+                mock.patch.object(reporter.futu_source, "fetch_financials",
+                                  return_value=fin_rows),
+                mock.patch.object(reporter.futu_source, "available",
+                                  return_value=False),
+                mock.patch.object(reporter.fetcher, "fetch_earnings",
+                                  return_value=[]),
+                mock.patch.object(reporter.fetcher, "is_non_equity_symbol",
+                                  return_value=False),
+                mock.patch.object(reporter.fetcher, "load_non_equity",
+                                  return_value=set()),
+                mock.patch.object(reporter.fetcher, "fetch_fx_rate",
+                                  return_value=0.032) as fx_rate,
+            ):
+                reporter.update_ticker(conn, "TSM", risk_free_rate=0.04)
+                conn.commit()
+            fx_rate.assert_called_once_with("TWD", "USD")
+            stored = database.get_quarterly_financials(conn, "TSM")
+            self.assertAlmostEqual(stored[0]["net_income"], 500e9 * 0.032)
         finally:
             conn.close()
 

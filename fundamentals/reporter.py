@@ -106,6 +106,14 @@ def update_ticker(
         fetcher.record_non_equity(ticker, quote_type)
         raise ValueError(f"{ticker}: skipped (non-equity quoteType {quote_type})")
 
+    # Fill fields the source couldn't provide (Futu has no sector/industry)
+    # from the previously stored profile, so updates don't erase them.
+    existing = database.get_company_profile(conn, ticker) or {}
+    for key in ("sector", "industry", "country", "employees",
+                "business_summary"):
+        if profile.get(key) is None:
+            profile[key] = existing.get(key)
+
     price = profile.get("current_price") or fetcher.fetch_price(ticker)
     try:
         fin_rows = futu_source.fetch_financials(ticker)
@@ -119,7 +127,11 @@ def update_ticker(
     # ADRs: statements in local currency, price/market cap in the listing
     # currency — convert statement money values so ratios are meaningful.
     # Per-share math downstream uses profile (ADR-equivalent) shares.
-    fin_ccy = profile.get("financial_currency")
+    # The yfinance profile carries financial_currency; for Futu rows the
+    # statement currency comes from the reports themselves.
+    fin_ccy = profile.get("financial_currency") or (
+        fin_rows[0].get("currency") if fin_rows else None
+    )
     price_ccy = profile.get("currency")
     if fin_ccy and price_ccy and fin_ccy != price_ccy:
         fin_rows = fetcher.apply_fx_rate(
@@ -282,7 +294,8 @@ def load_results(conn: sqlite3.Connection, tickers: list[str]) -> list[dict]:
 
         history_percentiles = {
             key: history.percentile(
-                ratios.get(key), [row.get(key) for row in history_rows[:20]]
+                ratios.get(key),
+                [row.get(key) for row in history_rows[:history.PERCENTILE_WINDOW]],
             )
             for key in RATIO_KEYS
         }

@@ -4,7 +4,7 @@ CAGRs and multi-year averages use annual ('10-K') rows; current
 profitability/return metrics use TTM flows over the latest balance sheet.
 """
 
-from fundamentals.calculator import latest, ttm
+from fundamentals.calculator import dedupe_quarters, latest, ttm
 
 # Assumed corporate tax rate for the NOPAT approximation in ROIC.
 TAX_RATE = 0.21
@@ -68,6 +68,7 @@ def compute_moat_metrics(fin_rows: list[dict]) -> dict:
     treated as 0 in invested capital; a None interest_coverage means "no
     measurable debt burden" and should be treated as such downstream.
     """
+    fin_rows = dedupe_quarters(fin_rows)
     row = latest(fin_rows) or {}
     revenue = ttm(fin_rows, "revenue")
     gross_profit = ttm(fin_rows, "gross_profit")

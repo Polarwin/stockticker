@@ -573,6 +573,10 @@ def fetch_financials(ticker: str) -> list[dict]:
                         "report_type": (
                             "10-K" if ftype == FINANCIAL_TYPE_ANNUAL else "10-Q"
                         ),
+                        # Statement currency (ISO 4217, e.g. "TWD" for the
+                        # TSM ADR); reporter uses it for FX conversion when
+                        # the profile lacks financial_currency.
+                        "currency": report.get("currency_code") or None,
                     },
                 )
                 for item in report.get("item_list", []):
@@ -584,6 +588,8 @@ def fetch_financials(ticker: str) -> list[dict]:
                     # Equity); the statement's own field order decides.
                     if key is not None and key not in row:
                         row[key] = _number(item["data"])
+                if not row.get("currency") and report.get("currency_code"):
+                    row["currency"] = report["currency_code"]
     except ValueError as exc:
         raise ValueError(f"{ticker}: Futu financials fetch failed ({exc})") from exc
 

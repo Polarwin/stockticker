@@ -6,7 +6,12 @@ No network access required; all fixtures are synthetic dicts.
 
 import unittest
 
-from fundamentals.calculator import compute_valuation_ratios, latest, ttm
+from fundamentals.calculator import (
+    compute_valuation_ratios,
+    dedupe_quarters,
+    latest,
+    ttm,
+)
 
 PROFILE = {
     "ticker": "TEST",
@@ -127,6 +132,37 @@ class TestValuationRatios(unittest.TestCase):
         ratios = compute_valuation_ratios(PROFILE, make_rows(), 100.0,
                                           eps_cagr_5yr=-0.05)
         self.assertIsNone(ratios["peg_ratio"])
+
+
+class TestDedupeQuarters(unittest.TestCase):
+    def test_ttm_dedupes_same_quarter_across_sources(self):
+        # Futu (2026-03-27) and yfinance (2026-03-31) dates for the same
+        # quarter must be summed once, not twice.
+        rows = [
+            make_quarter("2026-03-31", net_income=100.0),
+            make_quarter("2026-03-27", net_income=100.0),
+            make_quarter("2025-12-31", net_income=200.0),
+            make_quarter("2025-12-26", net_income=200.0),
+            make_quarter("2025-09-30", net_income=300.0),
+            make_quarter("2025-06-30", net_income=400.0),
+        ]
+        self.assertEqual(ttm(rows, "net_income"), 1000.0)
+
+    def test_dedupe_keeps_annual_and_quarterly_same_month(self):
+        rows = [
+            make_quarter("2025-09-30"),
+            dict(make_quarter("2025-09-26"), report_type="10-K"),
+        ]
+        self.assertEqual(len(dedupe_quarters(rows)), 2)
+
+    def test_ttm_dedupes_annual_rows(self):
+        rows = [
+            dict(make_quarter("2025-09-30"), report_type="10-K",
+                 net_income=100.0),
+            dict(make_quarter("2025-09-26"), report_type="10-K",
+                 net_income=100.0),
+        ]
+        self.assertEqual(ttm(rows, "net_income"), 100.0)
 
 
 if __name__ == "__main__":

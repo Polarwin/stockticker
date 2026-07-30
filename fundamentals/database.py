@@ -288,8 +288,23 @@ def is_profile_fresh(conn: sqlite3.Connection, ticker: str, max_age_days: int) -
 def upsert_quarterly_financials(
     conn: sqlite3.Connection, rows: list[dict]
 ) -> int:
-    """Insert or replace financial rows (annual + quarterly). Returns count."""
+    """Insert or replace financial rows (annual + quarterly). Returns count.
+
+    Sources disagree on fiscal period-end dates by a few days (Futu
+    2026-03-27 vs yfinance 2026-03-31 for the same quarter), so before
+    inserting a row, existing rows of the same ticker, report_type, and
+    fiscal year-month are deleted — otherwise mixed-source duplicates
+    would be summed twice by TTM calculations.
+    """
     for row in rows:
+        if row.get("fiscal_date"):
+            conn.execute(
+                "DELETE FROM quarterly_financials"
+                " WHERE ticker = ? AND report_type = ?"
+                " AND strftime('%Y-%m', fiscal_date) = ?",
+                (row["ticker"], row.get("report_type") or "",
+                 str(row["fiscal_date"])[:7]),
+            )
         _upsert(conn, "quarterly_financials", QUARTERLY_FINANCIALS_COLUMNS, row)
     return len(rows)
 
