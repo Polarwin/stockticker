@@ -1,11 +1,12 @@
 # Runtime dependencies (install into the project venv: bin/pip install -r requirements.txt)
-yfinance
-pandas
-requests
-python-dotenv
-Flask
-vaderSentiment
-futu-api  # Futu OpenD gateway SDK (futu_source.py); falls back gracefully if missing
+# Pinned to the versions in the current venv.
+yfinance==1.5.1
+pandas==3.0.3
+requests==2.34.2
+python-dotenv==1.2.2
+Flask==3.1.3
+vaderSentiment==3.3.2
+futu-api==10.9.6908  # Futu OpenD gateway SDK (futu_source.py); falls back gracefully if missing
 
 # Development
-pytest
+pytest==9.1.1
