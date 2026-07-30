@@ -639,6 +639,8 @@ def _update_fundamentals_weekly(now: datetime, max_age_days: int) -> None:
         reporter.update_all(conn, read_watchlist(), max_age_days=max_age_days)
     finally:
         conn.close()
+    # update_all only writes the DB; re-render the dashboard HTML too.
+    reporter.generate_dashboard(SETTINGS)
     conn = open_db()
     try:
         set_meta(conn, LAST_FUNDAMENTALS_UPDATE_KEY, now.isoformat())
