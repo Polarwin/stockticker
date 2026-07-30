@@ -6,6 +6,8 @@ from pathlib import Path
 
 import yfinance as yf
 
+import futu_source
+
 WATCHLIST_PATH = Path(__file__).with_name("watchlist.txt")
 
 
@@ -97,10 +99,11 @@ def format_price_line(
 def fetch_all_prices(tickers: list[str]) -> dict[str, tuple[float, float | None] | str]:
     """Fetch prices for all tickers, returning (price, change) or an error per symbol.
 
-    Prices come from fetch_live_quotes (1-minute bars with prepost=True, so
-    they include extended-hours trading and match the web UI). Symbols the
-    batch fetch misses fall back to the per-symbol daily fetch, which also
-    provides the per-symbol error strings on failure.
+    Prices come from fetch_live_quotes (Futu snapshot first, yfinance
+    1-minute prepost bars for the rest), so they include extended-hours
+    trading and match the web UI. Symbols the batch fetch misses fall back
+    to the per-symbol daily fetch, which also provides the per-symbol
+    error strings on failure.
     """
     quotes = fetch_live_quotes(tickers)
     results: dict[str, tuple[float, float | None] | str] = {}
@@ -119,11 +122,13 @@ def fetch_all_prices(tickers: list[str]) -> dict[str, tuple[float, float | None]
 def fetch_live_quotes(symbols: list[str]) -> dict:
     """Batch-fetch the most recent price and % change vs the previous close.
 
-    The price comes from 1-minute bars with prepost=True, so it includes
-    pre- and post-market trades when those sessions are active; outside
-    extended hours it equals the regular-session price. The % change is
-    measured against the previous regular-session close (same definition as
-    before). Falls back to daily bars when the intraday fetch fails.
+    Futu OpenD is the primary source (one snapshot call for all symbols);
+    symbols it misses (indexes, errors, gateway down) fall back to the
+    yfinance batch below. The price comes from 1-minute bars with
+    prepost=True in the yfinance path, so it includes pre- and post-market
+    trades when those sessions are active; outside extended hours it
+    equals the regular-session price. The % change is measured against the
+    previous regular-session close (same definition as before).
 
     Returns {symbol: {"price": float, "change_pct": float|None,
     "prev_close": float|None}}; symbols that fail are simply omitted
@@ -132,6 +137,21 @@ def fetch_live_quotes(symbols: list[str]) -> dict:
     if not symbols:
         return {}
 
+    quotes = futu_source.fetch_quotes(symbols)
+    missing = [s for s in symbols if s not in quotes]
+    if missing:
+        quotes.update(_fetch_live_quotes_yf(missing))
+    return quotes
+
+
+def _fetch_live_quotes_yf(symbols: list[str]) -> dict:
+    """yfinance batch quotes (fallback for fetch_live_quotes).
+
+    Daily bars (period="5d") give the previous regular-session close;
+    1-minute bars (prepost=True) give the most recent price including
+    extended hours, falling back to the last daily close when the
+    intraday fetch fails.
+    """
     def closes_for(data, symbol: str):
         # group_by="ticker" makes data[symbol] valid for one symbol or many.
         return data[symbol]["Close"].dropna()

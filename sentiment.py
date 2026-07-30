@@ -1,7 +1,8 @@
 """News headline fetching and VADER sentiment scoring.
 
-Provider chain per symbol: Finnhub company-news (FINNHUB_API_KEY) ->
-Alpha Vantage NEWS_SENTIMENT (ALPHAVANTAGE_API_KEY) -> yfinance .news.
+Provider chain per symbol: Futu OpenD (local gateway) -> Finnhub
+company-news (FINNHUB_API_KEY) -> Alpha Vantage NEWS_SENTIMENT
+(ALPHAVANTAGE_API_KEY) -> yfinance .news.
 Keys are read from the environment (.env loaded like notify.py); when a
 key is absent the next provider is used, so the module works with no
 keys at all. Per-symbol errors print a warning and yield no headlines.
@@ -17,6 +18,8 @@ from datetime import datetime, timedelta
 import requests
 import yfinance as yf
 from dotenv import load_dotenv
+
+import futu_source
 
 # Load environment variables from .env if present (same as notify.py).
 load_dotenv()
@@ -55,6 +58,8 @@ def news_source() -> str:
     """
     if _providers_used:
         return "+".join(sorted(_providers_used))
+    if futu_source.available():
+        return "futu"
     if _finnhub_key():
         return "finnhub"
     if _alphavantage_key():
@@ -190,6 +195,7 @@ def fetch_headlines(symbol: str, hours: int = 24) -> list[Headline]:
     per-symbol failures warn and return [].
     """
     providers = [
+        ("futu", futu_source.available, futu_source.fetch_headlines),
         ("finnhub", _finnhub_key, _finnhub_headlines),
         ("alphavantage", _alphavantage_key, _alphavantage_headlines),
     ]

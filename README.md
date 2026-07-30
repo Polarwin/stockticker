@@ -73,10 +73,20 @@ timing), news sentiment (VADER over the last 24h of headlines), options flow
 indicators-table base score plus pattern/sentiment/options bonuses), premarket
 movers, and auto-generated action items.
 
-News headlines come from Finnhub, falling back to Alpha Vantage and then
+News headlines come from Futu OpenD (local gateway, see `futu_source.py`)
+when it is running, falling back to Finnhub, Alpha Vantage, and then
 yfinance; options chains always come from yfinance. Set `FINNHUB_API_KEY`
 and/or `ALPHAVANTAGE_API_KEY` in `.env` to enable the paid sources — without
-them everything still works on yfinance. The "unusual volume" flag needs a
+them everything still works on yfinance. Futu needs the `futu-api` package
+(installed in this venv) and the FutuOpenD gateway on
+`FUTU_OPEND_HOST:FUTU_OPEND_PORT` (default 127.0.0.1:11111); it is also the
+preferred source for live prices (`fetch_live_quotes` — session-aware: it
+uses the pre-/after-hours/overnight price outside regular hours) and for
+fundamentals profiles and financial statements, with yfinance as the
+fallback. Symbols whose Futu code differs from the watchlist name are
+mapped in `futu_source.SYMBOL_MAP` (e.g. `^VIX` → `US..VIX`); OpenD
+currently refuses to quote US indices, so those still come from yfinance.
+The "unusual volume" flag needs a
 baseline that accumulates in the `options_volume` DB table (~a week of daily
 snapshots); until then only the put/call ratio is reported.
 
@@ -119,8 +129,11 @@ python main.py --premarket-report --include-fundamentals   # append score lines
   (30 pts), moat (25), 3yr revenue growth (20), balance-sheet stability (15),
   earnings beat streak (10).
 - **Data caveats** — yfinance provides ~5 quarters of quarterly statements and
-  ~4 years of annuals, so true 5-year CAGRs and the 20-snapshot history
-  percentiles build up as daily snapshots accumulate; guidance fields are
+  ~4 years of annuals; when Futu OpenD is available it supplies decades of
+  statements instead, and `update_ticker` backfills ~10 years of weekly
+  valuation snapshots (as-of financials × Futu weekly closes) the first time
+  a ticker's stored history is thin, so the history percentiles (260-snapshot
+  window) have multi-year depth immediately. Guidance fields are
   usually N/A (no reliable free source). ADRs (TSM, NOK, ASML, BABA, PDD,
   VALE…) report statements in their home currency: statement money values
   are FX-converted to the listing currency at the current rate before any

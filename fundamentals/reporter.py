@@ -21,6 +21,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from db import resolve_db_path
+import futu_source
 from fundamentals import (
     calculator,
     database,
@@ -88,14 +89,33 @@ def update_ticker(
     # a network call, detect new ones via quoteType and cache them.
     if fetcher.is_non_equity_symbol(ticker) or ticker in fetcher.load_non_equity():
         raise ValueError(f"{ticker}: skipped (known non-equity symbol)")
-    profile = fetcher.fetch_profile(ticker)
+
+    # Futu OpenD is the preferred source for profile/financials; any
+    # failure falls back to the yfinance fetcher for that piece.
+    try:
+        profile = futu_source.fetch_profile(ticker)
+    except Exception as exc:
+        print(
+            f"Warning: {ticker}: Futu profile unavailable ({exc}); "
+            "using yfinance",
+            file=sys.stderr,
+        )
+        profile = fetcher.fetch_profile(ticker)
     quote_type = (profile.get("quote_type") or "").upper()
     if quote_type in fetcher.NON_EQUITY_TYPES:
         fetcher.record_non_equity(ticker, quote_type)
         raise ValueError(f"{ticker}: skipped (non-equity quoteType {quote_type})")
 
-    price = fetcher.fetch_price(ticker)
-    fin_rows = fetcher.fetch_financials(ticker)
+    price = profile.get("current_price") or fetcher.fetch_price(ticker)
+    try:
+        fin_rows = futu_source.fetch_financials(ticker)
+    except Exception as exc:
+        print(
+            f"Warning: {ticker}: Futu financials unavailable ({exc}); "
+            "using yfinance",
+            file=sys.stderr,
+        )
+        fin_rows = fetcher.fetch_financials(ticker)
     # ADRs: statements in local currency, price/market cap in the listing
     # currency — convert statement money values so ratios are meaningful.
     # Per-share math downstream uses profile (ADR-equivalent) shares.
@@ -136,6 +156,24 @@ def update_ticker(
             fcf_ttm, shares, dcf["fcf_growth_rate_5yr"],
             dcf["discount_rate"], dcf["fcf_growth_rate_terminal"],
         )
+
+    # Backfill deep valuation history from Futu weekly prices when the
+    # stored history is still thin (a full backfill writes ~10 years of
+    # weekly snapshots, so this runs at most a few times per ticker).
+    try:
+        stored = len(database.get_historical_valuation(
+            conn, ticker, limit=history.BACKFILL_THRESHOLD + 1
+        ))
+        if stored < history.BACKFILL_THRESHOLD and futu_source.available():
+            points = futu_source.fetch_price_history(ticker)
+            written = history.backfill_valuation_history(
+                conn, ticker, profile, fin_rows, points
+            )
+            if written:
+                print(f"{ticker}: backfilled {written} valuation snapshots")
+    except Exception as exc:
+        print(f"Warning: {ticker}: valuation backfill failed ({exc})",
+              file=sys.stderr)
 
     history_percentiles = history.update_historical_valuation(
         conn, ticker, ratios, profile.get("sector")
