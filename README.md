@@ -86,6 +86,24 @@ fundamentals profiles and financial statements, with yfinance as the
 fallback. Symbols whose Futu code differs from the watchlist name are
 mapped in `futu_source.SYMBOL_MAP` (e.g. `^VIX` → `US..VIX`); OpenD
 currently refuses to quote US indices, so those still come from yfinance.
+
+## Macro market news
+
+`market_news.py` crawls the news providers for market-moving macro topics
+(not just watchlist stocks): Fed & rates, geopolitics, oil & energy,
+trade & tariffs, and big tech & regulation. It runs every
+`market_news_interval_seconds` (default 900) inside the web UI's
+background loop. High-priority topics (Fed & rates, geopolitics) send a
+Telegram alert immediately; the rest accumulate into a digest shown in
+the premarket report's Market Overview section. Classification is
+keyword-based (deterministic, no AI). Toggle it with
+`"market_news_enabled": false` in `settings.json` — the loop re-reads it
+every round, no restart needed. Topics/keywords are overridable via
+`market_news_topics` in settings.json. State (dedup + digest) lives in
+`data/market_news_seen.json`. Manual round: `python main.py
+--market-news [--test]`. The first run per topic only seeds the dedup
+state, so enabling it never floods Telegram.
+
 The "unusual volume" flag needs a
 baseline that accumulates in the `options_volume` DB table (~a week of daily
 snapshots); until then only the put/call ratio is reported.

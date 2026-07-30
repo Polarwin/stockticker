@@ -47,6 +47,8 @@ DEFAULT_SETTINGS = {
     "premarket_open": "04:00",
     "postmarket_close": "20:00",
     "fundamentals_refresh_days": 7,
+    "market_news_enabled": True,
+    "market_news_interval_seconds": 900,
 }
 
 
@@ -416,6 +418,11 @@ def main() -> None:
         help="Check for newly released earnings reports immediately, then exit.",
     )
     parser.add_argument(
+        "--market-news",
+        action="store_true",
+        help="Run one macro market-news crawl round immediately, then exit.",
+    )
+    parser.add_argument(
         "--signals",
         action="store_true",
         help="Check MACD/RSI crossovers immediately, then exit.",
@@ -528,6 +535,16 @@ def main() -> None:
 
     if args.earnings_watch:
         do_earnings_watch(settings, args.test)
+        return
+
+    if args.market_news:
+        import market_news
+
+        counts = market_news.run_round(
+            settings, notify=None if args.test else send_telegram
+        )
+        print(f"Market news: {counts['alerts']} alerts, "
+              f"{counts['digest']} digest items")
         return
 
     if args.sector_heatmap:

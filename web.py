@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 import yfinance as yf
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
+import market_news
 from collector import (
     db_update_due,
     fetch_history_rows,
@@ -51,6 +52,7 @@ from main import (
 from ticker import WATCHLIST_PATH, fetch_live_quotes
 
 SETTINGS = load_settings()
+SETTINGS_PATH = Path(__file__).with_name("settings.json")
 MARKET_TZ = ZoneInfo(SETTINGS["market_timezone"])
 
 STATIC_DIR = Path(__file__).with_name("static")
@@ -612,6 +614,15 @@ def api_status(symbol: str):
 LAST_FUNDAMENTALS_UPDATE_KEY = "last_fundamentals_update"
 
 
+def _market_news_enabled() -> bool:
+    """Re-read the market-news toggle from settings.json (no restart needed)."""
+    try:
+        loaded = json.loads(SETTINGS_PATH.read_text())
+        return bool(loaded.get("market_news_enabled", True))
+    except (OSError, ValueError):
+        return True
+
+
 def _fundamentals_update_due(max_age_days: int, now: datetime) -> bool:
     """True when fundamentals were never refreshed or are older than max_age_days."""
     if max_age_days <= 0:
@@ -677,10 +688,12 @@ def _notification_loop() -> None:
     quotes_interval = int(SETTINGS["quotes_refresh_seconds"])
     quotes_market_hours_only = SETTINGS["quotes_market_hours_only"]
     fundamentals_refresh_days = int(SETTINGS["fundamentals_refresh_days"])
+    news_interval = int(SETTINGS.get("market_news_interval_seconds", 900))
     last_check_date = None
     last_premarket_date = None
     last_ticker_round = 0.0
     last_quote_refresh = 0.0
+    last_news_round = 0.0
     while True:
         now = datetime.now(MARKET_TZ)
         # BaseException: send_telegram raises SystemExit on API failure,
@@ -699,6 +712,15 @@ def _notification_loop() -> None:
             ):
                 last_quote_refresh = time.monotonic()
                 update_quotes_cache(SETTINGS)
+            if (
+                time.monotonic() - last_news_round >= news_interval
+                and _market_news_enabled()
+            ):
+                last_news_round = time.monotonic()
+                counts = market_news.run_round(SETTINGS, notify=send_telegram)
+                if counts["alerts"] or counts["digest"]:
+                    print(f"Market news: {counts['alerts']} alerts, "
+                          f"{counts['digest']} digest items")
             if _fundamentals_update_due(fundamentals_refresh_days, now):
                 _update_fundamentals_weekly(now, fundamentals_refresh_days)
             if now.time() >= check_time and last_check_date != now.date():

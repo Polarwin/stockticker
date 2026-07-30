@@ -25,5 +25,7 @@
   "quotes_market_hours_only": true,
   "premarket_open": "04:00",
   "postmarket_close": "20:00",
-  "fundamentals_refresh_days": 7
+  "fundamentals_refresh_days": 7,
+  "market_news_enabled": true,
+  "market_news_interval_seconds": 900
 }

@@ -114,24 +114,31 @@ def to_futu_code(symbol: str) -> str | None:
     return f"US.{symbol.replace('-', '.')}"
 
 
+def search_news(keyword: str, limit: int = 10) -> list[dict]:
+    """Futu news search by arbitrary keyword (ticker, topic, anything).
+
+    Returns raw dicts with title/source/publish_time/url keys. Raises
+    ValueError when OpenD is unavailable or the search fails.
+    """
+    ctx = _quote_ctx()
+    if ctx is None:
+        raise ValueError(f"{keyword}: Futu OpenD unavailable")
+    futu = _futu()
+    ret, data = ctx.get_search_news(
+        keyword, max_count=limit, news_sub_type=futu.NewsSubType.NEWS
+    )
+    if ret != futu.RET_OK:
+        raise ValueError(f"{keyword}: Futu news search failed ({data})")
+    return data.to_dict("records")
+
+
 def fetch_headlines(symbol: str, hours: int = 24) -> list[Headline]:
     """Recent Futu news for a symbol as (source, title), filtered to `hours`."""
     code = to_futu_code(symbol)
     if code is None:
         raise ValueError(f"{symbol}: not a US symbol Futu can serve")
-    ctx = _quote_ctx()
-    if ctx is None:
-        raise ValueError(f"{symbol}: Futu OpenD unavailable")
-    futu = _futu()
-    ret, data = ctx.get_search_news(
-        code, max_count=NEWS_RESULT_LIMIT, news_sub_type=futu.NewsSubType.NEWS
-    )
-    if ret != futu.RET_OK:
-        raise ValueError(f"{symbol}: Futu news search failed ({data})")
-
-    cutoff = datetime.now() - timedelta(hours=hours)
     items: list[Headline] = []
-    for record in data.to_dict("records"):
+    for record in search_news(code, limit=NEWS_RESULT_LIMIT):
         title = str(record.get("title") or "").strip()
         if not title:
             continue
@@ -145,6 +152,7 @@ def fetch_headlines(symbol: str, hours: int = 24) -> list[Headline]:
                 break
             except ValueError:
                 continue
+        cutoff = datetime.now() - timedelta(hours=hours)
         if when is not None and when < cutoff:
             continue
         items.append((str(record.get("source") or ""), title))

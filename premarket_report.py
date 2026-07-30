@@ -124,8 +124,14 @@ def get_news(symbol: str, max_items: int = 2) -> list[NewsItem]:
 
 def fetch_overview() -> dict:
     """Overnight futures, VIX, 10-year yield, and top market headlines."""
+    import market_news
+
     quotes = {s: (p, c, prev) for s, p, c, prev in get_premarket_quotes(OVERVIEW_SYMBOLS)}
-    return {"quotes": quotes, "headlines": fetch_market_headlines(max_items=3)}
+    return {
+        "quotes": quotes,
+        "headlines": fetch_market_headlines(max_items=3),
+        "news_digest": market_news.recent_digest(max_items=8),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -584,7 +590,10 @@ def _format_overview_lines(data: dict) -> list[str]:
     tnx_price, tnx_pct, _ = quotes.get("^TNX", (None, None, None))
     if tnx_price is not None:
         parts.append(f"^TNX {tnx_price:.2f} ({_fmt_pct(tnx_pct)})")
-    return [" · ".join(parts)] if parts else []
+    lines = [" · ".join(parts)] if parts else []
+    for item in data["overview"].get("news_digest", []):
+        lines.append(f"📰 [{item['topic']}] {item['title']}")
+    return lines
 
 
 def format_telegram(data: dict) -> str:
@@ -809,12 +818,20 @@ def _overview_card(data: dict) -> str:
         f"<li>{_esc(f'[{source}] ' if source else '')}{_esc(title)}</li>"
         for source, title in data["overview"]["headlines"]
     )
+    digest = "".join(
+        f"<li>{_esc('[' + item['topic'] + '] ')}{_esc(item['title'])}</li>"
+        for item in data["overview"].get("news_digest", [])
+    )
+    digest_block = (
+        f'<h3>Macro news</h3><ul class="compact">{digest}</ul>'
+        if digest else ""
+    )
     return (
         '<section class="card"><h2>1. Market Overview</h2>'
         "<table><thead><tr><th>Symbol</th><th>Price</th><th>Overnight</th>"
         "<th>Prev Close</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
-        f'<ul class="compact">{headlines}</ul></section>'
+        f'<ul class="compact">{headlines}</ul>{digest_block}</section>'
     )
 
 
