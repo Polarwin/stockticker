@@ -18,17 +18,22 @@ from collector import (
     fetch_history_rows,
     update_database,
     update_earnings,
+    update_quotes_cache,
 )
 from db import (
     delete_holding,
+    get_cached_quotes,
     get_holdings,
     get_latest_quotes,
     get_meta,
+    get_options_volume,
     init_db,
     resolve_db_path,
     set_meta,
+    upsert_cached_quotes,
     upsert_earnings,
     upsert_holding,
+    upsert_options_volume,
     upsert_prices,
 )
 from earnings_reminder import get_earnings_info
@@ -268,21 +273,32 @@ def search_static(query: str) -> list[dict]:
 
 @app.get("/api/quotes")
 def api_quotes():
-    """Live price and % change vs previous close for each watchlist symbol.
+    """Price and % change vs previous close for each watchlist symbol.
 
-    Batch-fetched from yfinance; symbols that fail fall back to the latest
-    values stored in daily_prices.
+    Served from the quotes_cache table, which the background notification
+    loop refreshes during market hours (update_quotes_cache). Symbols
+    without a cached row fall back to the latest values in daily_prices.
+    On a completely empty cache (first run) one synchronous fetch fills it.
     """
     symbols = read_watchlist()
-    quotes = fetch_live_quotes(symbols)
-
-    missing = [s for s in symbols if s not in quotes]
-    if missing:
-        conn = open_db()
-        try:
+    conn = open_db()
+    try:
+        quotes = get_cached_quotes(conn, symbols)
+        if not quotes and symbols:
+            # First run before the background loop has refreshed: fill the
+            # cache synchronously so the page is not empty.
+            live = fetch_live_quotes(symbols)
+            if live:
+                upsert_cached_quotes(
+                    conn, live, datetime.now(MARKET_TZ).isoformat()
+                )
+                conn.commit()
+                quotes = live
+        missing = [s for s in symbols if s not in quotes]
+        if missing:
             quotes.update(get_latest_quotes(conn, missing))
-        finally:
-            conn.close()
+    finally:
+        conn.close()
     return jsonify(quotes)
 
 
@@ -398,19 +414,23 @@ def api_prices(symbol: str):
         conn.close()
 
     # Overlay the latest (possibly intraday) bar so the last candle shows
-    # the latest price even before the nightly DB update. On weekends and
-    # holidays yfinance returns the last trading day, already stored above.
-    try:
-        live_rows = fetch_history_rows(symbol, "1d")
-    except ValueError as exc:
-        print(f"Warning: {exc}")
-        live_rows = []
-    if live_rows:
-        live = live_rows[-1]
-        if rows and rows[-1][0] == live[0]:
-            rows[-1] = live
-        elif not rows or live[0] > rows[-1][0]:
-            rows.append(live)
+    # the latest price even before the nightly DB update. Only fetched
+    # while the market is open; when closed the stored daily bar is already
+    # final, and skipping keeps page loads from blocking on yfinance.
+    if is_market_open(
+        datetime.now(MARKET_TZ), SETTINGS["market_open"], SETTINGS["market_close"]
+    ):
+        try:
+            live_rows = fetch_history_rows(symbol, "1d")
+        except ValueError as exc:
+            print(f"Warning: {exc}")
+            live_rows = []
+        if live_rows:
+            live = live_rows[-1]
+            if rows and rows[-1][0] == live[0]:
+                rows[-1] = live
+            elif not rows or live[0] > rows[-1][0]:
+                rows.append(live)
 
     all_closes = [r[4] for r in rows]
     macd_data = macd(all_closes)
@@ -513,6 +533,26 @@ def api_indicators(symbol: str):
     conn = open_db()
     try:
         bars = _bars_from_db(conn, symbol)
+        # Options flow is cached per symbol per day in options_volume, so
+        # repeat views of the indicators panel don't re-fetch the chain.
+        cached = get_options_volume(conn, symbol, today().isoformat())
+        if cached is not None:
+            call_volume, put_volume = cached
+            pcr = round(put_volume / call_volume, 3) if call_volume > 0 else None
+            flow = {
+                "call_volume": call_volume,
+                "put_volume": put_volume,
+                "pcr": pcr,
+                "expiries": [],
+            }
+        else:
+            flow = fetch_options_flow(symbol)
+            if flow:
+                upsert_options_volume(
+                    conn, symbol, today().isoformat(),
+                    flow["call_volume"], flow["put_volume"],
+                )
+                conn.commit()
     finally:
         conn.close()
     closes, volumes = bars["closes"], bars["volumes"]
@@ -527,7 +567,6 @@ def api_indicators(symbol: str):
     )
     rows.append(pattern_indicator_row(patterns))
 
-    flow = fetch_options_flow(symbol)
     rows.append(options_indicator_row(flow))
 
     score = apply_bonuses(base, patterns, None, flow["pcr"] if flow else None)
@@ -570,6 +609,44 @@ def api_status(symbol: str):
     )
 
 
+LAST_FUNDAMENTALS_UPDATE_KEY = "last_fundamentals_update"
+
+
+def _fundamentals_update_due(max_age_days: int, now: datetime) -> bool:
+    """True when fundamentals were never refreshed or are older than max_age_days."""
+    if max_age_days <= 0:
+        return False
+    conn = open_db()
+    try:
+        last = get_meta(conn, LAST_FUNDAMENTALS_UPDATE_KEY)
+    finally:
+        conn.close()
+    if not last:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except ValueError:
+        return True
+    return now - last_dt >= timedelta(days=max_age_days)
+
+
+def _update_fundamentals_weekly(now: datetime, max_age_days: int) -> None:
+    """Refresh fundamentals for the watchlist (TTL-gated) and stamp the meta key."""
+    from fundamentals import database, reporter
+
+    conn = database.init_db(reporter.resolve_fundamentals_db_path(SETTINGS))
+    try:
+        reporter.update_all(conn, read_watchlist(), max_age_days=max_age_days)
+    finally:
+        conn.close()
+    conn = open_db()
+    try:
+        set_meta(conn, LAST_FUNDAMENTALS_UPDATE_KEY, now.isoformat())
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _notification_loop() -> None:
     """Background notifications, replacing the old stockticker daemon.
 
@@ -581,7 +658,13 @@ def _notification_loop() -> None:
     check) runs at db_update_time, same as the old daemon. On top of
     that, watchlist price rounds are sent to Telegram
     every ticker_interval_seconds while the UI toggle
-    (/api/ticker-alerts) is enabled. All state is DB-driven, so restarts
+    (/api/ticker-alerts) is enabled. The quotes_cache table the web UI
+    serves is refreshed every quotes_refresh_seconds (during extended
+    hours, premarket_open..postmarket_close, when quotes_market_hours_only
+    is on), with each refresh also appended to intraday_quotes, and
+    fundamentals are refreshed in the background at most every
+    fundamentals_refresh_days days.
+    All state is DB-driven, so restarts
     neither lose windows nor resend messages.
     """
     check_time = dt_time.fromisoformat(SETTINGS["earnings_check_time"])
@@ -589,14 +672,33 @@ def _notification_loop() -> None:
     db_update_time = dt_time.fromisoformat(SETTINGS["db_update_time"])
     interval = int(SETTINGS["ticker_interval_seconds"])
     earnings_days = int(SETTINGS["earnings_remind_days"])
+    quotes_interval = int(SETTINGS["quotes_refresh_seconds"])
+    quotes_market_hours_only = SETTINGS["quotes_market_hours_only"]
+    fundamentals_refresh_days = int(SETTINGS["fundamentals_refresh_days"])
     last_check_date = None
     last_premarket_date = None
     last_ticker_round = 0.0
+    last_quote_refresh = 0.0
     while True:
         now = datetime.now(MARKET_TZ)
         # BaseException: send_telegram raises SystemExit on API failure,
         # which must not kill this thread.
         try:
+            if (
+                time.monotonic() - last_quote_refresh >= quotes_interval
+                and (
+                    not quotes_market_hours_only
+                    or is_market_open(
+                        now,
+                        SETTINGS["premarket_open"],
+                        SETTINGS["postmarket_close"],
+                    )
+                )
+            ):
+                last_quote_refresh = time.monotonic()
+                update_quotes_cache(SETTINGS)
+            if _fundamentals_update_due(fundamentals_refresh_days, now):
+                _update_fundamentals_weekly(now, fundamentals_refresh_days)
             if now.time() >= check_time and last_check_date != now.date():
                 last_check_date = now.date()
                 update_earnings(SETTINGS)

@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 from fundamentals import database, reporter
 
@@ -226,6 +227,77 @@ class TestLoadResults(unittest.TestCase):
         self.assertEqual(result["ratios"]["pe_ratio"], 20.0)
         self.assertEqual(result["price"], 100.0)  # from the DCF row
         self.assertIn("total", result["fundamental_score"])
+
+
+class TestUpdateAllTTL(unittest.TestCase):
+    def _fake_result(self, ticker):
+        result = make_result(ticker=ticker)
+        return result
+
+    def _run_update_all(self, conn, tickers, max_age_days):
+        with (
+            mock.patch.object(
+                reporter.fetcher, "fetch_risk_free_rate", return_value=0.04
+            ),
+            mock.patch.object(reporter, "update_ticker") as update_ticker,
+        ):
+            update_ticker.side_effect = lambda conn, t, **kw: self._fake_result(t)
+            results = reporter.update_all(
+                conn, tickers, max_age_days=max_age_days
+            )
+        return results, update_ticker
+
+    def test_fresh_profile_skipped_stale_refetched(self):
+        conn = database.init_db(":memory:")
+        try:
+            database.upsert_company_profile(conn, {
+                "ticker": "FRESH", "name": "Fresh Co",
+                "updated_at": date.today().isoformat(),
+            })
+            database.upsert_company_profile(conn, {
+                "ticker": "STALE", "name": "Stale Co",
+                "updated_at": "2020-01-01",
+            })
+            conn.commit()
+            results, update_ticker = self._run_update_all(
+                conn, ["FRESH", "STALE"], max_age_days=7
+            )
+        finally:
+            conn.close()
+        self.assertEqual([r["ticker"] for r in results], ["STALE"])
+        update_ticker.assert_called_once()
+
+    def test_no_ttl_refetches_everything(self):
+        conn = database.init_db(":memory:")
+        try:
+            database.upsert_company_profile(conn, {
+                "ticker": "FRESH", "name": "Fresh Co",
+                "updated_at": date.today().isoformat(),
+            })
+            conn.commit()
+            results, update_ticker = self._run_update_all(
+                conn, ["FRESH"], max_age_days=0
+            )
+        finally:
+            conn.close()
+        self.assertEqual(len(results), 1)
+        update_ticker.assert_called_once()
+
+    def test_is_profile_fresh(self):
+        conn = database.init_db(":memory:")
+        try:
+            database.upsert_company_profile(conn, {
+                "ticker": "NEW", "name": "New Co",
+            })  # updated_at defaults to today
+            database.upsert_company_profile(conn, {
+                "ticker": "OLD", "name": "Old Co", "updated_at": "2020-01-01",
+            })
+            conn.commit()
+            self.assertTrue(database.is_profile_fresh(conn, "NEW", 7))
+            self.assertFalse(database.is_profile_fresh(conn, "OLD", 7))
+            self.assertFalse(database.is_profile_fresh(conn, "MISSING", 7))
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

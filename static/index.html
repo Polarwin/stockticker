@@ -457,6 +457,7 @@ async function loadQuotes() {
 // --- watchlist / portfolio table ---
 let holdings = {};
 let watchlistSymbols = [];
+let lastQuotes = {};
 let sortState = { key: 'change', dir: -1 };
 try {
   const saved = JSON.parse(localStorage.getItem('wlSort') || 'null');
@@ -491,6 +492,7 @@ async function refreshQuotes() {
   if (!watchlistSymbols.length) return;
   try {
     const quotes = await loadQuotes();
+    lastQuotes = quotes;
     renderWatchlist(watchlistSymbols, quotes);
   } catch (e) { /* keep stale values on failure */ }
 }
@@ -679,6 +681,7 @@ async function editHolding(sym) {
 }
 
 // Column sorting: click a header to sort, click again to flip direction.
+// Pure client-side re-render of the already-fetched rows — no round-trip.
 document.querySelectorAll('#watchlist-table th[data-sort]').forEach(th => {
   th.dataset.label = th.textContent;
   th.addEventListener('click', () => {
@@ -688,7 +691,7 @@ document.querySelectorAll('#watchlist-table th[data-sort]').forEach(th => {
       sortState = { key: th.dataset.sort, dir: th.dataset.sort === 'symbol' ? 1 : -1 };
     }
     try { localStorage.setItem('wlSort', JSON.stringify(sortState)); } catch (e) {}
-    loadWatchlist();
+    renderWatchlist(watchlistSymbols, lastQuotes);
   });
 });
 

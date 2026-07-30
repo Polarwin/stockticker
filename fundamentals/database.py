@@ -6,7 +6,7 @@ dicts keyed by column name; updated_at defaults to today when omitted.
 """
 
 import sqlite3
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "fundamentals.db"
@@ -270,6 +270,19 @@ def get_company_profile(conn: sqlite3.Connection, ticker: str) -> dict | None:
         conn, "SELECT * FROM company_profiles WHERE ticker = ?", (ticker,)
     )
     return rows[0] if rows else None
+
+
+def is_profile_fresh(conn: sqlite3.Connection, ticker: str, max_age_days: int) -> bool:
+    """True when the stored profile's updated_at is within max_age_days of today."""
+    profile = get_company_profile(conn, ticker)
+    updated = (profile or {}).get("updated_at")
+    if not updated:
+        return False
+    try:
+        updated_date = date.fromisoformat(str(updated)[:10])
+    except ValueError:
+        return False
+    return updated_date >= date.today() - timedelta(days=max_age_days)
 
 
 def upsert_quarterly_financials(

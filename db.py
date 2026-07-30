@@ -102,6 +102,29 @@ def init_db(path: Path | str) -> sqlite3.Connection:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS quotes_cache (
+            symbol     TEXT PRIMARY KEY,
+            price      REAL,
+            change_pct REAL,
+            prev_close REAL,
+            fetched_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS intraday_quotes (
+            symbol     TEXT NOT NULL,
+            ts         TEXT NOT NULL,
+            price      REAL,
+            change_pct REAL,
+            prev_close REAL,
+            PRIMARY KEY (symbol, ts)
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS options_volume (
             symbol      TEXT NOT NULL,
             date        TEXT NOT NULL,
@@ -226,6 +249,90 @@ def get_latest_quotes(conn: sqlite3.Connection, symbols: list[str]) -> dict:
             "prev_close": round(prev_close, 2) if prev_close is not None else None,
         }
     return quotes
+
+
+def upsert_cached_quotes(
+    conn: sqlite3.Connection, quotes: dict, fetched_at: str
+) -> int:
+    """Insert or replace cached quotes. Returns the row count.
+
+    `quotes` has the shape returned by ticker.fetch_live_quotes:
+    {symbol: {"price": float, "change_pct": float|None, "prev_close": float|None}}.
+    """
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO quotes_cache
+            (symbol, price, change_pct, prev_close, fetched_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (symbol, q["price"], q["change_pct"], q["prev_close"], fetched_at)
+            for symbol, q in quotes.items()
+        ],
+    )
+    return len(quotes)
+
+
+def insert_intraday_quotes(
+    conn: sqlite3.Connection, quotes: dict, ts: str
+) -> int:
+    """Append one intraday snapshot per symbol. Returns rows inserted.
+
+    Same quotes shape as upsert_cached_quotes. Existing (symbol, ts) rows
+    are left untouched, so duplicate snapshots never double-count.
+    """
+    cur = conn.executemany(
+        """
+        INSERT OR IGNORE INTO intraday_quotes
+            (symbol, ts, price, change_pct, prev_close)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (symbol, ts, q["price"], q["change_pct"], q["prev_close"])
+            for symbol, q in quotes.items()
+        ],
+    )
+    return cur.rowcount
+
+
+def get_cached_quotes(conn: sqlite3.Connection, symbols: list[str]) -> dict:
+    """Cached quotes for symbols, same shape as get_latest_quotes.
+
+    Symbols without a cached row are omitted.
+    """
+    quotes = {}
+    for symbol in symbols:
+        row = conn.execute(
+            """
+            SELECT price, change_pct, prev_close FROM quotes_cache
+            WHERE symbol = ?
+            """,
+            (symbol,),
+        ).fetchone()
+        if row is None or row[0] is None:
+            continue
+        quotes[symbol] = {
+            "price": row[0],
+            "change_pct": row[1],
+            "prev_close": row[2],
+        }
+    return quotes
+
+
+def get_options_volume(
+    conn: sqlite3.Connection, symbol: str, date: str
+) -> tuple[int, int] | None:
+    """Return the (call_volume, put_volume) snapshot for a symbol/date, or None."""
+    row = conn.execute(
+        """
+        SELECT call_volume, put_volume FROM options_volume
+        WHERE symbol = ? AND date = ?
+        """,
+        (symbol, date),
+    ).fetchone()
+    if row is None:
+        return None
+    return (row[0] or 0, row[1] or 0)
 
 
 def get_reported_quarter(conn: sqlite3.Connection, symbol: str) -> str | None:

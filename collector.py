@@ -7,10 +7,19 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
-from db import get_meta, init_db, resolve_db_path, set_meta, upsert_earnings, upsert_prices
+from db import (
+    get_meta,
+    init_db,
+    insert_intraday_quotes,
+    resolve_db_path,
+    set_meta,
+    upsert_cached_quotes,
+    upsert_earnings,
+    upsert_prices,
+)
 from earnings_reminder import get_earnings_info
 from indicators import detect_crossovers
-from ticker import load_watchlist
+from ticker import fetch_live_quotes, load_watchlist
 
 LAST_UPDATE_KEY = "last_update_date"
 # Number of days re-downloaded on each update to cover gaps from downtime.
@@ -114,6 +123,38 @@ def update_database(settings: dict, test: bool = False) -> tuple[int, int]:
         return symbols_updated, rows_total
     finally:
         conn.close()
+
+
+def update_quotes_cache(settings: dict) -> int:
+    """Refresh the quotes_cache table with a batch fetch from yfinance.
+
+    The web UI serves /api/quotes from this table, so the background loop
+    is the only place live quotes are fetched. Each refresh also appends
+    one snapshot per symbol to intraday_quotes, building a 5-minute
+    history that covers pre- and post-market (yfinance only serves
+    intraday data for the trailing 60 days, so it must be collected
+    continuously). Console log only.
+
+    Returns the number of symbols cached.
+    """
+    market_tz = ZoneInfo(settings["market_timezone"])
+    now = datetime.now(market_tz)
+    timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    quotes = fetch_live_quotes(load_watchlist())
+    if not quotes:
+        print(f"{timestamp} Quotes cache: fetch returned nothing, keeping old values")
+        return 0
+
+    conn = init_db(resolve_db_path(settings["db_path"]))
+    try:
+        count = upsert_cached_quotes(conn, quotes, now.isoformat())
+        insert_intraday_quotes(conn, quotes, now.isoformat())
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"{timestamp} Quotes cache updated: {count} symbols")
+    return count
 
 
 def update_earnings(settings: dict, test: bool = False, conn=None) -> int:

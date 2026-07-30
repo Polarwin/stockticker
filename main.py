@@ -42,6 +42,11 @@ DEFAULT_SETTINGS = {
     "premarket_check_time": "08:45",
     "premarket_move_threshold_pct": 2.0,
     "fundamentals_db_path": "data/fundamentals.db",
+    "quotes_refresh_seconds": 300,
+    "quotes_market_hours_only": True,
+    "premarket_open": "04:00",
+    "postmarket_close": "20:00",
+    "fundamentals_refresh_days": 7,
 }
 
 
@@ -177,9 +182,10 @@ def do_update_fundamentals(
     from ticker import load_watchlist
 
     tickers = load_watchlist() if all_tickers else [ticker.strip().upper()]
+    max_age_days = int(settings.get("fundamentals_refresh_days", 7))
     conn = database.init_db(reporter.resolve_fundamentals_db_path(settings))
     try:
-        reporter.update_all(conn, tickers, test=test)
+        reporter.update_all(conn, tickers, test=test, max_age_days=max_age_days)
     finally:
         conn.close()
 

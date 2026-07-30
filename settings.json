@@ -20,5 +20,10 @@
   "premarket_check_time": "08:45",
   "premarket_move_threshold_pct": 2.0,
   "heatmap_split_industries": ["Semiconductors", "Semiconductor Equipment & Materials"],
-  "heatmap_stock_threshold_pct": 5.0
+  "heatmap_stock_threshold_pct": 5.0,
+  "quotes_refresh_seconds": 300,
+  "quotes_market_hours_only": true,
+  "premarket_open": "04:00",
+  "postmarket_close": "20:00",
+  "fundamentals_refresh_days": 7
 }

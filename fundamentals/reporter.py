@@ -185,16 +185,25 @@ def update_ticker(
 
 
 def update_all(
-    conn: sqlite3.Connection, tickers: list[str], test: bool = False
+    conn: sqlite3.Connection,
+    tickers: list[str],
+    test: bool = False,
+    max_age_days: int = 0,
 ) -> list[dict]:
     """update_ticker over a batch; per-symbol failures warn and are skipped.
 
     The risk-free rate is fetched once for the whole batch. Commits after
     each successful ticker so one failure costs nothing already stored.
+    When max_age_days > 0, tickers whose stored profile is fresher than
+    that are skipped (weekly TTL); they still appear in load_results,
+    which rebuilds the dashboard purely from stored rows.
     """
     risk_free_rate = fetcher.fetch_risk_free_rate()
     results = []
     for ticker in tickers:
+        if max_age_days > 0 and database.is_profile_fresh(conn, ticker, max_age_days):
+            print(f"{ticker}: fresh (updated within {max_age_days}d), skipping")
+            continue
         try:
             result = update_ticker(
                 conn, ticker, watchlist=tickers, risk_free_rate=risk_free_rate
