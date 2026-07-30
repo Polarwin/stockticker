@@ -118,6 +118,10 @@ class FutuTestCase(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Keep the suite fast: no real sleeping between statement calls.
+        throttle = mock.patch.object(futu_source, "_STATEMENT_MIN_INTERVAL", 0)
+        throttle.start()
+        self.addCleanup(throttle.stop)
         self.addCleanup(futu_source.reset_for_tests)
 
 

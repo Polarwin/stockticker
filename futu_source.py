@@ -16,6 +16,7 @@ back per symbol.
 import atexit
 import os
 import sys
+import time
 from datetime import datetime, timedelta
 
 # A headline is (source, title) — same shape as sentiment.py.
@@ -88,9 +89,10 @@ def available() -> bool:
 
 def reset_for_tests() -> None:
     """Drop the cached context and re-enable (used by unit tests)."""
-    global _ctx, _disabled
+    global _ctx, _disabled, _last_statement_call
     _ctx = None
     _disabled = False
+    _last_statement_call = 0.0
 
 
 def to_futu_code(symbol: str) -> str | None:
@@ -481,6 +483,19 @@ FIELD_CANDIDATES: dict[str, tuple[str, ...]] = {
 FINANCIAL_TYPE_ANNUAL = 7  # Qot_Common.F10Type: 1-4 single quarters, 7 annual
 _STATEMENT_TYPES = (1, 2, 3)  # 1=income, 2=balance, 3=cashflow
 _MAX_PAGES = 6  # 6 pages x 50 reports covers decades of history
+# Futu limits get_financials_statements to 30 calls per 30 seconds;
+# without spacing, a watchlist-wide batch blows the budget and every
+# later ticker silently falls back to yfinance.
+_STATEMENT_MIN_INTERVAL = 1.1
+_last_statement_call = 0.0
+
+
+def _throttle_statement_call() -> None:
+    global _last_statement_call
+    wait = _STATEMENT_MIN_INTERVAL - (time.monotonic() - _last_statement_call)
+    if wait > 0:
+        time.sleep(wait)
+    _last_statement_call = time.monotonic()
 
 # Schema keys every returned row carries (None when Futu has no value).
 _ROW_KEYS = tuple(FIELD_CANDIDATES)
@@ -510,6 +525,7 @@ def _fetch_statement_reports(ctx, code: str, statement_type: int) -> list[dict]:
     reports: list[dict] = []
     next_key = None
     for _ in range(_MAX_PAGES):
+        _throttle_statement_call()
         ret, result = ctx.get_financials_statements(
             code,
             statement_type=statement_type,

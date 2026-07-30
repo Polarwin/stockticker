@@ -1,0 +1,14 @@
+[Unit]
+Description=stockticker web UI + background notifications
+After=network-online.target futuopend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/stockticker
+ExecStart=%h/Projects/stockticker/bin/python %h/Projects/stockticker/web.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
