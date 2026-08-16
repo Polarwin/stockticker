@@ -39,4 +39,5 @@ data/
 *.log
 
 # Kimi Code session data
-.kimi-code/
+.kimi-code/*
+!.kimi-code/skills/
