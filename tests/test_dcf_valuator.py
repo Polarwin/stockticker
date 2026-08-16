@@ -10,6 +10,7 @@ from fundamentals.dcf_valuator import (
     compute_dcf,
     dcf_value,
     mos_label,
+    net_debt_from_rows,
     sensitivity_grid,
 )
 
@@ -52,6 +53,53 @@ class TestDcfValue(unittest.TestCase):
         # discount <= terminal growth: Gordon denominator not positive.
         self.assertIsNone(dcf_value(FCF_TTM, SHARES, 0.10, 0.025))
         self.assertIsNone(dcf_value(FCF_TTM, SHARES, 0.10, 0.02))
+
+    def test_net_debt_bridge(self):
+        base = dcf_value(FCF_TTM, SHARES, 0.10, 0.10)
+        net_debt = 500_000_000.0  # 5.0 per share
+        bridged = dcf_value(FCF_TTM, SHARES, 0.10, 0.10, net_debt=net_debt)
+        self.assertAlmostEqual(
+            bridged["intrinsic_value_per_share"],
+            base["intrinsic_value_per_share"] - 5.0,
+        )
+        # Enterprise view is unaffected by the bridge.
+        self.assertAlmostEqual(
+            bridged["enterprise_value_per_share"],
+            base["intrinsic_value_per_share"],
+        )
+        # Net cash (negative net debt) lifts the per-share value.
+        net_cash = dcf_value(FCF_TTM, SHARES, 0.10, 0.10,
+                             net_debt=-200_000_000.0)
+        self.assertAlmostEqual(
+            net_cash["intrinsic_value_per_share"],
+            base["intrinsic_value_per_share"] + 2.0,
+        )
+
+
+class TestNetDebtFromRows(unittest.TestCase):
+    def test_debt_minus_cash(self):
+        rows = [{"fiscal_date": "2025-12-31", "total_debt": 800.0,
+                 "cash_and_equivalents": 300.0}]
+        self.assertEqual(net_debt_from_rows(rows), 500.0)
+
+    def test_uses_newest_row(self):
+        rows = [
+            {"fiscal_date": "2024-12-31", "total_debt": 1000.0,
+             "cash_and_equivalents": 0.0},
+            {"fiscal_date": "2025-12-31", "total_debt": 800.0,
+             "cash_and_equivalents": 300.0},
+        ]
+        self.assertEqual(net_debt_from_rows(rows), 500.0)
+
+    def test_partial_and_missing_fields(self):
+        self.assertEqual(net_debt_from_rows(
+            [{"fiscal_date": "2025-12-31", "total_debt": 800.0}]), 800.0)
+        self.assertEqual(net_debt_from_rows(
+            [{"fiscal_date": "2025-12-31", "cash_and_equivalents": 300.0}]),
+            -300.0)
+        self.assertIsNone(net_debt_from_rows(
+            [{"fiscal_date": "2025-12-31"}]))
+        self.assertIsNone(net_debt_from_rows([]))
 
 
 def make_dcf_inputs(**overrides):
@@ -125,6 +173,28 @@ class TestComputeDcf(unittest.TestCase):
         self.assertIsNone(result["upside_downside_pct"])
         self.assertIsNone(result["mos_label"])
 
+    def test_equity_bridge_from_balance_sheet(self):
+        inputs = make_dcf_inputs()
+        inputs["fin_rows"][0].update({
+            "total_debt": 800_000_000.0,
+            "cash_and_equivalents": 300_000_000.0,
+        })
+        result = compute_dcf(**inputs)
+        # net_debt 500M over 100M shares -> 5.0/share below the EV view.
+        self.assertEqual(result["net_debt"], 500_000_000.0)
+        self.assertAlmostEqual(
+            result["intrinsic_value_per_share"],
+            result["enterprise_value_per_share"] - 5.0,
+        )
+
+    def test_no_balance_sheet_data_skips_bridge(self):
+        result = compute_dcf(**make_dcf_inputs())
+        self.assertIsNone(result["net_debt"])
+        self.assertAlmostEqual(
+            result["intrinsic_value_per_share"],
+            result["enterprise_value_per_share"],
+        )
+
 
 class TestMosLabel(unittest.TestCase):
     def test_bands(self):
@@ -165,6 +235,19 @@ class TestSensitivityGrid(unittest.TestCase):
         self.assertIsNone(sensitivity_grid(FCF_TTM, None, 0.10, 0.10))
         self.assertIsNone(sensitivity_grid(FCF_TTM, SHARES, None, 0.10))
         self.assertIsNone(sensitivity_grid(FCF_TTM, SHARES, 0.10, None))
+
+    def test_grid_applies_net_debt_bridge(self):
+        net_debt = 500_000_000.0  # 5.0 per share
+        grid = sensitivity_grid(FCF_TTM, SHARES, 0.10, 0.10,
+                                net_debt=net_debt)
+        base = dcf_value(FCF_TTM, SHARES, 0.10, 0.10, net_debt=net_debt)
+        self.assertAlmostEqual(
+            grid["values"][2][2], base["intrinsic_value_per_share"]
+        )
+        plain = sensitivity_grid(FCF_TTM, SHARES, 0.10, 0.10)
+        self.assertAlmostEqual(
+            grid["values"][2][2], plain["values"][2][2] - 5.0
+        )
 
 
 if __name__ == "__main__":

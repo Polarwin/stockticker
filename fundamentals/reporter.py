@@ -182,6 +182,7 @@ def update_ticker(
         sensitivity = dcf_valuator.sensitivity_grid(
             fcf_ttm, shares, dcf["fcf_growth_rate_5yr"],
             dcf["discount_rate"], dcf["fcf_growth_rate_terminal"],
+            net_debt=dcf.get("net_debt"),
         )
 
     # Backfill deep valuation history from Futu weekly prices when the
@@ -330,6 +331,7 @@ def load_results(conn: sqlite3.Connection, tickers: list[str]) -> list[dict]:
                 fcf_ttm, shares, dcf.get("fcf_growth_rate_5yr"),
                 dcf.get("discount_rate"),
                 dcf.get("fcf_growth_rate_terminal") or 0.025,
+                net_debt=dcf_valuator.net_debt_from_rows(fin_rows),
             )
 
         latest_fin = calculator.latest(fin_rows) or {}

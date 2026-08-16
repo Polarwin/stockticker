@@ -1,7 +1,9 @@
 """Pure DCF valuation. No network, no sqlite.
 
 Two-stage model: explicit 5-year FCF-per-share projection, then a Gordon
-growth terminal value, all discounted at a CAPM-flavored rate.
+growth terminal value, all discounted at a CAPM-flavored rate. When the
+latest balance sheet carries debt/cash, an equity bridge is applied:
+enterprise value minus net debt (total debt - cash), per share.
 """
 
 from fundamentals.calculator import latest, ttm
@@ -27,18 +29,36 @@ def mos_label(upside_downside_pct: float) -> str:
     return "Overvalued"
 
 
+def net_debt_from_rows(fin_rows: list[dict]) -> float | None:
+    """Net debt (total debt minus cash) from the newest quarterly row.
+
+    None when the latest row carries neither total_debt nor
+    cash_and_equivalents — the equity bridge is skipped rather than
+    assumed zero.
+    """
+    row = latest(fin_rows) or {}
+    total_debt = row.get("total_debt")
+    cash = row.get("cash_and_equivalents")
+    if total_debt is None and cash is None:
+        return None
+    return (total_debt or 0.0) - (cash or 0.0)
+
+
 def dcf_value(
     fcf_ttm: float | None,
     shares: float | None,
     growth_5yr: float | None,
     discount_rate: float | None,
     terminal_growth: float = TERMINAL_GROWTH,
+    net_debt: float | None = None,
 ) -> dict | None:
     """Intrinsic value per share from TTM free cash flow.
 
     None when fcf_ttm/shares are missing or <= 0, when growth or discount
     inputs are missing, or when discount_rate <= terminal_growth (the
-    Gordon denominator would not be positive).
+    Gordon denominator would not be positive). When net_debt (aggregate,
+    same currency as fcf_ttm) is given, it is subtracted per share as an
+    equity bridge.
     """
     if (fcf_ttm is None or fcf_ttm <= 0 or shares is None or shares <= 0
             or growth_5yr is None or discount_rate is None
@@ -56,10 +76,15 @@ def dcf_value(
     )
     intrinsic += terminal_value / (1 + discount_rate) ** 5
 
+    enterprise_per_share = intrinsic
+    if net_debt is not None:
+        intrinsic -= net_debt / shares
+
     return {
         "fcf_per_share_ttm": fcf_per_share,
         "projected_fcf_5yr": sum(projected),
         "terminal_value": terminal_value,
+        "enterprise_value_per_share": enterprise_per_share,
         "intrinsic_value_per_share": intrinsic,
     }
 
@@ -103,8 +128,10 @@ def compute_dcf(
 
     growth = _growth_rate(moat_metrics.get("revenue_cagr_5yr"))
     discount = _discount_rate(risk_free_rate, profile.get("beta"), terminal_growth)
+    net_debt = net_debt_from_rows(fin_rows)
 
-    result = dcf_value(fcf_ttm, shares, growth, discount, terminal_growth)
+    result = dcf_value(fcf_ttm, shares, growth, discount, terminal_growth,
+                       net_debt=net_debt)
     if result is None:
         return None
 
@@ -118,6 +145,7 @@ def compute_dcf(
         "fcf_growth_rate_5yr": growth,
         "fcf_growth_rate_terminal": terminal_growth,
         "discount_rate": discount,
+        "net_debt": net_debt,
         "intrinsic_value": intrinsic_per_share * shares,
         "upside_downside_pct": upside,
         "margin_of_safety": upside,
@@ -132,13 +160,15 @@ def sensitivity_grid(
     base_growth: float | None,
     base_discount: float | None,
     terminal_growth: float = TERMINAL_GROWTH,
+    net_debt: float | None = None,
 ) -> dict | None:
     """5x5 grid of intrinsic values around the base assumptions.
 
     Growth offsets ±0.04 in 0.02 steps; discount offsets ±0.02 in 0.01
     steps. Cells where the discount rate <= terminal_growth (or the value
     is otherwise not computable) are None. Returns None when any base
-    input is None.
+    input is None. net_debt applies the same per-share equity bridge as
+    dcf_value so the grid stays comparable to the headline value.
     """
     if (fcf_ttm is None or shares is None or shares <= 0
             or base_growth is None or base_discount is None):
@@ -151,7 +181,8 @@ def sensitivity_grid(
     for growth in growth_rates:
         row = []
         for discount in discount_rates:
-            result = dcf_value(fcf_ttm, shares, growth, discount, terminal_growth)
+            result = dcf_value(fcf_ttm, shares, growth, discount,
+                               terminal_growth, net_debt=net_debt)
             row.append(
                 result["intrinsic_value_per_share"] if result else None
             )
